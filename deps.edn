@@ -1,0 +1,20 @@
+{
+ :paths ["src/clj"]
+ :deps {
+        org.clojure/clojure { :mvn/version "1.12.0" }
+        org.clojure/tools.cli { :mvn/version "1.1.230"}
+        org.clojure/core.async { :mvn/version "1.8.741" }
+
+        camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
+
+        nubank/k8s-api {:mvn/version  "1.0.0"}
+        nubank/clj-kubernetes-api {:mvn/version "1.14.0"}
+
+        metosin/reitit {:mvn/version "0.9.1"}
+        }
+ :aliases {
+           :test {:extra-paths ["test"]
+                  :extra-deps {org.clojure/test.check {:mvn/version "1.1.0"}}
+                  :main-opts ["-m" "clojure.test"]}
+           }
+ }
