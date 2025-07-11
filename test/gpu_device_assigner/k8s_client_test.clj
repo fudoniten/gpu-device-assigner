@@ -4,10 +4,10 @@
 
 (deftest test-get-node
   (testing "get-node should retrieve node information"
-    (let [mock-invoke (fn [_ {:keys [kind action request]}]
-                        (case [kind action]
-                          [:Node :get] {:name (:name request) :status "Ready"}))
-          client (k8s/->K8SClient mock-invoke)]
+    (let [inner-client (fn [_ {:keys [kind action request]}]
+                         (case [kind action]
+                           [:Node :get] {:name (:name request) :status "Ready"}))
+          client (k8s/->K8SClient inner-client)]
       (is (= {:name "test-node" :status "Ready"}
              (k8s/get-node client "test-node"))))))
 
