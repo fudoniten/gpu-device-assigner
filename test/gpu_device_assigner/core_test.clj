@@ -1,9 +1,6 @@
 (ns gpu-device-assigner.core-test
-  (:require [gpu-device-assigner.core :as sut]
-            [clojure.test :as t]))
-(ns gpu-device-assigner.core-test
-  (:require [clojure.test :refer :all]
-            [gpu-device-assigner.core :as core]))
+  (:require [gpu-device-assigner.core :as core]
+            [clojure.test :refer [deftest is testing run-tests]]))
 
 (deftest test-base64-encode
   (testing "Base64 encoding"
