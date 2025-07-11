@@ -95,7 +95,6 @@
 ;;     :value value}])
 
 (defn device-reserved?
-  "Check if a device is reserved by a different pod."
   "A device is reserved if it's assigned to a different pod. Otherwise, it's free."
   [reservations dev-id this-pod]
   (some-> reservations
