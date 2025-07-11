@@ -8,7 +8,6 @@
         camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
 
         nubank/k8s-api {:mvn/version  "1.0.0"}
-        nubank/clj-kubernetes-api {:mvn/version "1.14.0"}
 
         metosin/reitit {:mvn/version "0.9.1"}
         }
