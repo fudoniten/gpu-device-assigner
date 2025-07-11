@@ -4,23 +4,17 @@
             [clojure.set :refer [subset?]]
 
             [gpu-device-assigner.logging :as log]
+            [gpu-device-assigner.k8s-client :as k8s]
 
             [reitit.ring :as ring]
             [cheshire.core :as json]
-            [ring.util.response :as response]
-            [kubernetes-api.core :as k8s])
+            [ring.util.response :as response])
   (:import java.util.Base64
            java.time.Instant))
 
-(defn get-node
-  [{:keys [k8s-client]} node-name]
-  (k8s/invoke k8s-client {:kind    :Node
-                          :action  :get
-                          :request {:name node-name}}))
-
 (defn get-node-annotations
-  [ctx node-name]
-  (-> (get-node ctx node-name)
+  [{:keys [k8s-client]} node-name]
+  (-> (k8s/get-node k8s-client node-name)
       :metadata
       :annotations))
 
@@ -58,10 +52,7 @@
 
 (defn node-patch
   [{:keys [k8s-client]} node-name patch]
-  (k8s/invoke k8s-client
-              {:kind  :Node
-               :name  node-name
-               :patch patch}))
+  (k8s/patch-node k8s-client node-name patch))
 
 (defn reserve-device
   [{:keys [logger] :as ctx} {:keys [node-name namespace pod device-id]}]
@@ -87,16 +78,6 @@
                    (log/error logger (format "error %s: unable to reserve device %s for pod %s: %s"
                                              (:status status) device-id pod (:message e))))
                  nil)))))))
-
-(defn list-ns-pods
-  [{:keys [k8s-client]} namespace]
-  (k8s/invoke k8s-client {:kind    :Pod
-                          :action  :list
-                          :request {:namespace namespace}}))
-
-;; TODO: Implement!
-;; (defn watch-pods [k8s-client namespace callback]
-;;   (k8s-api/watch-namespaced-pod k8s-client namespace {:watch true :callback callback}))
 
 ;; (defn patch-annotation [annotation-path value]
 ;;   [{:op    "add"

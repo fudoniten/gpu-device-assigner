@@ -1,4 +1,5 @@
-(ns gpu-device-assigner.logging)
+(ns gpu-device-assigner.logging
+  (:require [clojure.spec.alpha :as s]))
 
 (defprotocol Logger
   (fatal [self msg])
@@ -34,3 +35,9 @@
       (debug [_ msg]
         (when (<= log-idx (log-index :debug))
           (println msg))))))
+
+(defn logger?
+  [o]
+  (satisfies? Logger o))
+
+(s/def ::logger logger?)
