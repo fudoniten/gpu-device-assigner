@@ -89,11 +89,6 @@
                                              (:status status) device-id pod (:message e))))
                  nil)))))))
 
-;; (defn patch-annotation [annotation-path value]
-;;   [{:op    "add"
-;;     :path  annotation-path
-;;     :value value}])
-
 (defn device-reserved?
   "Check if a device is reserved by a different pod and if that pod still exists."
   [{:keys [k8s-client]} reservations dev-id this-pod]
@@ -101,7 +96,7 @@
         reserved-pod (:pod reservation)]
     (and reserved-pod
          (not= reserved-pod this-pod)
-         (pod-exists? k8s-client reserved-pod (:namespace reservation)))))
+         (k8s/pod-exists? k8s-client reserved-pod (:namespace reservation)))))
 
 (defn assign-device
   "Assign a GPU device to a pod based on requested labels."
@@ -127,52 +122,49 @@
                            :pod       pod
                            :device-id selected-id}))))))
 
+(defn try-json-parse [str]
+  (try
+    (json/parse-string str true)
+    (catch Exception e
+      (throw (ex-info "exception encountered when parsing json string"
+                      {:body str :exception e})))))
 
+(defn try-json-generate [json]
+    (try
+    (json/generate-string json true)
+    (catch Exception e
+      (throw (ex-info "exception encountered when generating json string"
+                      {:body str :exception e})))))
 
-;; (defn try-json-parse [str]
-;;   (try
-;;     (json/parse-string str true)
-;;     (catch Exception e
-;;       (throw (ex-info "exception encountered when parsing json string"
-;;                       {:body str :exception e})))))
+(defn json-middleware
+  "Middleware to encode/decode the JSON body of requests/responses."
+  [handler]
+  (fn [req]
+    (if-let [body {:body req}]
+      (-> body
+          (slurp)
+          (try-json-parse)
+          (handler)
+          (try-json-generate)
+          (response/response)
+          (assoc-in [:headers "Content-Type"] "application/json"))
+      (throw (ex-info "missing request body!" {:req req})))))
 
-;; (defn try-json-generate [json]
-;;     (try
-;;     (json/generate-string json true)
-;;     (catch Exception e
-;;       (throw (ex-info "exception encountered when generating json string"
-;;                       {:body str :exception e})))))
-
-;; (defn json-middleware
-;;   "Middleware to encode/decode the JSON body of requests/responses."
-;;   [handler]
-;;   (fn [req]
-;;     (if-let [body {:body req}]
-;;       (-> body
-;;           (slurp)
-;;           (try-json-parse)
-;;           (handler)
-;;           (try-json-generate)
-;;           (response/response)
-;;           (assoc-in [:headers "Content-Type"] "application/json"))
-;;       (throw (ex-info "missing request body!" {:req req})))))
-
-;; (defn open-fail-middleware
-;;   "Middleware to ensure some response is passed to the caller."
-;;   [verbose]
-;;   (fn [handler]
-;;     (fn [{:keys [uid] :as req}]
-;;       (try
-;;         (handler req)
-;;         (catch Exception e
-;;           (log/error (format "error handling request: %s" (str e)))
-;;           (when verbose
-;;             (log/debug (print-stack-trace e)))
-;;           (-> {:apiVersion "admission.k8s.io/v1"
-;;                :kind "AdmissionReview"
-;;                :response {:uid     uid
-;;                           :allowed true}}
-;;               (try-json-generate)))))))
+(defn open-fail-middleware
+  "Middleware to ensure some response is passed to the caller."
+  [{:keys [logger]}]
+  (fn [handler]
+    (fn [{:keys [uid] :as req}]
+      (try
+        (handler req)
+        (catch Exception e
+          (log/error logger (format "error handling request: %s" (str e)))
+          (log/debug logger (print-stack-trace
+          (-> {:apiVersion "admission.k8s.io/v1"
+               :kind "AdmissionReview"
+               :response {:uid     uid
+                          :allowed true}}
+              (try-json-generate)))))))))
 
 (defn admission-review-response
   "Create a response for an AdmissionReview request."
@@ -228,38 +220,11 @@
                                    :message (format "failed to find unreserved device for pod %s on node %s."
                                                     pod node-name))))))
 
-;; (defn app [verbose k8s-client]
-;;   (ring/ring-handler
-;;    (ring/router [["/mutate" {:post (handle-mutation verbose k8s-client)}]]
-;;                 {:data {:middleware [json-middleware
-;;                                      (open-fail-middleware verbose)]}})))
-
-;; ;; old stuff
-
-;; (defn assign-device [admission-review]
-;;   (let [request        (get admission-review "request")
-;;         uid            (get request "uid")
-;;         namespace      (get-in request ["object" "metadata" "namespace"])
-;;         name           (get-in request ["object" "metadata" "name"])
-;;         node-name      (get-in request ["object" "spec" "nodeName"])
-;;         annotations    (get-in request ["object" "metadata" "annotations"])
-;;         needs          (some-> annotations (get "gpu.openai.com/needs") (str/split #","))
-;;         selected-device "card0" ; TODO: dynamic selection based on node annotations and needs
-;;         patch          (patch-annotation "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu" selected-device)]
-;;     {:apiVersion "admission.k8s.io/v1"
-;;      :kind       "AdmissionReview"
-;;      :response   {:uid       uid
-;;                   :allowed   true
-;;                   :patch     (-> patch json/generate-string (.getBytes "UTF-8") java.util.Base64/getEncoder encodeToString)
-;;                   :patchType "JSONPatch"}}))
-
-;; (defn webhook-handler [req]
-;;   (let [body-string (slurp (:body req))
-;;         admission-review (json/parse-string body-string)]
-;;     (-> (assign-device admission-review)
-;;         json/generate-string
-;;         response
-;;         (assoc :headers {"Content-Type" "application/json"}))))
+(defn app [ctx]
+  (ring/ring-handler
+   (ring/router [["/mutate" {:post (handle-mutation ctx)}]]
+                {:data {:middleware [json-middleware
+                                     (open-fail-middleware ctx)]}})))
 
 ;; (defn -main [& _]
 ;;   (jetty/run-jetty webhook-handler {:port 8443 :join? false}))
