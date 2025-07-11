@@ -104,7 +104,7 @@
 
 (defn assign-device
   "Assign a GPU device to a pod based on requested labels."
-  [ctx {:keys [node-name pod namespace requested-labels]}]
+  [{:keys [logger] :as ctx} {:keys [node-name pod namespace requested-labels]}]
   (let [node-dev-labels (get-device-labels ctx node-name)
         candidates (filter (fn [[_ dev-labels]] (subset? requested-labels dev-labels))
                            node-dev-labels)]
@@ -117,7 +117,7 @@
                             (keys candidates))]
       (if (empty? available)
         (do
-          (log/error (format "error: no available devices found for pod %s on node %s." pod node-name))
+          (log/error logger (format "error: no available devices found for pod %s on node %s." pod node-name))
           nil)
         (let [selected-id (rand-nth available)]
           (reserve-device ctx
