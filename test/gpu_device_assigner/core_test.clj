@@ -18,4 +18,48 @@
   (testing "Parsing JSON string into Clojure data structure"
     (is (= {:key "value"} (core/parse-json "{\"key\": \"value\"}")))))
 
+(deftest test-assign-device
+  (let [mock-logger (reify core/Logger
+                      (fatal [_ _])
+                      (error [_ _])
+                      (warn [_ _])
+                      (info [_ _])
+                      (debug [_ _]))
+        mock-k8s-client (reify k8s/IK8SBaseClient
+                          (invoke [_ {:keys [kind action request]}]
+                            (case [kind action]
+                              [:Node :get] {:metadata {:annotations {:fudo.org/gpu.device.labels
+                                                                     (core/base64-encode (json/generate-string {"gpu1" #{"label1"}}))
+                                                                     :fudo.org/gpu.device.reservations
+                                                                     (json/generate-string {"gpu1" {:pod "other-pod" :namespace "default"}})}}}
+                              [:Pod :get] (if (= "other-pod" (:name request))
+                                            {:name (:name request) :namespace (:namespace request)}
+                                            (throw (ex-info "Not found" {:type :not-found}))))))]
+    (testing "Fail if no matching device is found"
+      (let [ctx {:logger mock-logger :k8s-client mock-k8s-client}
+            result (core/assign-device ctx {:node-name "node1" :pod "test-pod" :namespace "default" :requested-labels #{"nonexistent-label"}})]
+        (is (nil? result))))
+
+    (testing "Succeed if a matching device is found and available"
+      (let [ctx {:logger mock-logger :k8s-client mock-k8s-client}
+            result (core/assign-device ctx {:node-name "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
+        (is (= "gpu1" result))))
+
+    (testing "Fail if a matching device is found but reserved by a still-existing pod"
+      (let [ctx {:logger mock-logger :k8s-client mock-k8s-client}
+            result (core/assign-device ctx {:node-name "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
+        (is (nil? result))))
+
+    (testing "Succeed if a matching device is found, and is reserved but by a pod that no longer exists"
+      (let [ctx {:logger mock-logger :k8s-client (reify k8s/IK8SBaseClient
+                                                   (invoke [_ {:keys [kind action request]}]
+                                                     (case [kind action]
+                                                       [:Node :get] {:metadata {:annotations {:fudo.org/gpu.device.labels
+                                                                                              (core/base64-encode (json/generate-string {"gpu1" #{"label1"}}))
+                                                                                              :fudo.org/gpu.device.reservations
+                                                                                              (json/generate-string {"gpu1" {:pod "nonexistent-pod" :namespace "default"}})}}}
+                                                       [:Pod :get] (throw (ex-info "Not found" {:type :not-found})))))]
+            result (core/assign-device ctx {:node-name "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
+        (is (= "gpu1" result))))))
+
 (run-tests 'gpu-device-assigner.core-test)
