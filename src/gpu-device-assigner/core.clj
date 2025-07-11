@@ -226,8 +226,10 @@
                 {:data {:middleware [json-middleware
                                      (open-fail-middleware ctx)]}})))
 
-;; (defn -main [& _]
-;;   (jetty/run-jetty webhook-handler {:port 8443 :join? false}))
+(defn start-server
+  "Start the web server with the given context and port."
+  [ctx port]
+  (jetty/run-jetty (app ctx) {:port port :join? false}))
 
 
 ;; {
