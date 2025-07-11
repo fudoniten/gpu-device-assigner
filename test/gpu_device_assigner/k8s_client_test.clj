@@ -21,7 +21,8 @@
 (deftest test-pod-exists?
   (testing "pod-exists? should return true if pod exists"
     (let [mock-client (reify k8s/IK8SClient
-                        (pod-exists? [_ pod-name namespace] true))
+                        (pod-exists? [_ pod-name namespace] true)
+                        (get-pod [_ pod-name namespace] {:name pod-name :namespace namespace}))
           client (k8s/->K8SClient mock-client)]
       (is (true? (k8s/pod-exists? client "test-pod" "default")))))
 
