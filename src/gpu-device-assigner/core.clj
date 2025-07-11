@@ -114,13 +114,17 @@
                  nil))
     (let [reservations (get-device-reservations ctx node-name)
           available (filter (fn [dev-id] (not (device-reserved? reservations dev-id pod)))
-                            (keys candidates))
-          selected-id (rand-nth available)]
-      (reserve-device ctx
-                      {:node-name node-name
-                       :namespace namespace
-                       :pod       pod
-                       :device-id selected-id}))))
+                            (keys candidates))]
+      (if (empty? available)
+        (do
+          (log/error (format "error: no available devices found for pod %s on node %s." pod node-name))
+          nil)
+        (let [selected-id (rand-nth available)]
+          (reserve-device ctx
+                          {:node-name node-name
+                           :namespace namespace
+                           :pod       pod
+                           :device-id selected-id}))))))
 
 
 
