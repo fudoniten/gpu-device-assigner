@@ -9,6 +9,7 @@
            java.util.Base64))
 
 (defprotocol IK8SClient
+  "Protocol defining Kubernetes client operations."
   (get-node    [self node-name])
   (patch-node  [self node-name patch])
 
@@ -47,6 +48,7 @@
              (throw e))))))
 
 (defn base64-string?
+  "Check if a string is a valid Base64 encoded string."
   [o]
   (let [decoder (Base64/getDecoder)]
     (try
@@ -57,16 +59,19 @@
         nil))))
 
 (defn k8s-client?
+  "Check if an object satisfies the K8SClient protocol."
   [o]
   (satisfies? K8SClient o))
 
 (defn jwt-string?
+  "Check if a string is a valid JWT token."
   [o]
   (let [jwt-pattern #"^[A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$"]
     (boolean (and (string? o)
                   (re-matches jwt-pattern o)))))
 
 (defn kube-url?
+  "Check if a string is a valid Kubernetes URL."
   [o]
   (try
     (let [url (URL. o)]
@@ -80,13 +85,16 @@
 (s/def ::client k8s-client?)
 
 (defn load-certificate
+  "Load a certificate from a file and trim whitespace."
   [cert-file]
   (-> cert-file (slurp) (str/trim)))
 
 (s/fdef create
   :args (s/keys* :req-un [::url ::token ::certificate-authority-data])
   :ret  ::client)
-(defn create [& {:keys [url] :as req}]
+(defn create
+  "Create a new Kubernetes client with the given configuration."
+  [& {:keys [url] :as req}]
   (->K8SClient (k8s/client url (select-keys req [:token :certificate-authority-data]))))
 
 (stest/instrument 'create)

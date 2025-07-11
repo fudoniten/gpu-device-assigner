@@ -11,6 +11,7 @@
   :args (s/keys* :req-un [::logger ::k8s-client])
   :ret  ::context)
 (defn create
+  "Create a new context with a logger and Kubernetes client."
   [& {:keys [logger k8s-client]
       :or   {logger (log/print-logger)}}]
   {:logger     logger

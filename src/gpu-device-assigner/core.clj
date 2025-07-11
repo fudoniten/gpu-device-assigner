@@ -13,28 +13,35 @@
            java.time.Instant))
 
 (defn get-node-annotations
+  "Retrieve annotations from a Kubernetes node."
   [{:keys [k8s-client]} node-name]
   (-> (k8s/get-node k8s-client node-name)
       :metadata
       :annotations))
 
 (defn base64-encode
+  "Encode a string to Base64."
   [str]
   (let [encoder (Base64/getEncoder)]
     (.encodeToString encoder (.getBytes str "UTF-8"))))
 
 (defn base64-decode
+  "Decode a Base64 encoded string."
   [b64-str]
   (let [decoder (Base64/getDecoder)]
     (.decode decoder b64-str)))
 
 (defn map-vals
+  "Apply a function to all values in a map."
   [f m]
   (into {} (map (fn [[k v]] [k (f v)])) m))
 
-(defn parse-json [str] (json/parse-string str true))
+(defn parse-json
+  "Parse a JSON string into a Clojure data structure."
+  [str] (json/parse-string str true))
 
 (defn get-device-labels
+  "Get GPU device labels from node annotations."
   [ctx node-name]
   (some->> (get-node-annotations ctx node-name)
            :fudo.org/gpu.device.labels
@@ -43,6 +50,7 @@
            (map-vals set)))
 
 (defn get-device-reservations
+  "Retrieve current device reservations from node annotations."
   [ctx node-name]
   (let [annotations (get-node-annotations ctx node-name)]
     (some->> annotations
@@ -51,10 +59,12 @@
              (assoc (select-keys annotations [:resourceVersion]) :reservations))))
 
 (defn node-patch
+  "Apply a patch to a Kubernetes node."
   [{:keys [k8s-client]} node-name patch]
   (k8s/patch-node k8s-client node-name patch))
 
 (defn reserve-device
+  "Reserve a GPU device for a pod if available."
   [{:keys [logger] :as ctx} {:keys [node-name namespace pod device-id]}]
   (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node-name)]
     (if-let [reservation (get reservations device-id)]
@@ -85,6 +95,7 @@
 ;;     :value value}])
 
 (defn device-reserved?
+  "Check if a device is reserved by a different pod."
   "A device is reserved if it's assigned to a different pod. Otherwise, it's free."
   [reservations dev-id this-pod]
   (some-> reservations
@@ -92,7 +103,9 @@
           :pod
           (not= this-pod)))
 
-(defn assign-device [ctx {:keys [node-name pod namespace requested-labels]}]
+(defn assign-device
+  "Assign a GPU device to a pod based on requested labels."
+  [ctx {:keys [node-name pod namespace requested-labels]}]
   (let [node-dev-labels (get-device-labels ctx node-name)
         candidates (filter (fn [[_ dev-labels]] (subset? requested-labels dev-labels))
                            node-dev-labels)]
@@ -158,6 +171,7 @@
 ;;               (try-json-generate)))))))
 
 (defn admission-review-response
+  "Create a response for an AdmissionReview request."
   [& {:keys [uid allowed?
              status message
              patch]}]
@@ -175,6 +189,7 @@
                   :patch     patch})})
 
 (defn device-assignment-patch
+  "Generate a JSON patch for assigning a device to a pod."
   [device-id]
   (-> {:op    "add"
        :path  "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu"
@@ -183,6 +198,7 @@
       (base64-encode)))
 
 (defn handle-mutation
+  "Handle an AdmissionReview request for mutating a pod's annotations."
   [ctx]
   (fn [{:keys [kind] :as req}]
     (when-not (= kind "AdmissionReview")
