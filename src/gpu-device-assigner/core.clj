@@ -95,12 +95,13 @@
 ;;     :value value}])
 
 (defn device-reserved?
-  "A device is reserved if it's assigned to a different pod. Otherwise, it's free."
-  [reservations dev-id this-pod]
-  (some-> reservations
-          (get dev-id)
-          :pod
-          (not= this-pod)))
+  "Check if a device is reserved by a different pod and if that pod still exists."
+  [{:keys [k8s-client]} reservations dev-id this-pod]
+  (let [reservation (get reservations dev-id)
+        reserved-pod (:pod reservation)]
+    (and reserved-pod
+         (not= reserved-pod this-pod)
+         (pod-exists? k8s-client reserved-pod (:namespace reservation)))))
 
 (defn assign-device
   "Assign a GPU device to a pod based on requested labels."
@@ -113,7 +114,7 @@
                          pod (str/join ", " requested-labels))
                  nil))
     (let [reservations (get-device-reservations ctx node-name)
-          available (filter (fn [dev-id] (not (device-reserved? reservations dev-id pod)))
+          available (filter (fn [dev-id] (not (device-reserved? ctx reservations dev-id pod)))
                             (keys candidates))]
       (if (empty? available)
         (do
