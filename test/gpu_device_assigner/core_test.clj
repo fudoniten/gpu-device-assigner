@@ -46,6 +46,42 @@
       (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client :gpu-reservations {})}
             handle-mutation-fn (core/handle-mutation ctx)
             request {:kind "AdmissionReview"
+                     :request {:uid "123abc..."
+                               :object {:metadata {:name "mypod"
+                                                   :namespace "default"
+                                                   :annotations {"gpu.openai.com/needs" "true"}}
+                                        :spec {:nodeName "gpu-node-1"}}}}
+            response (handle-mutation-fn request)]
+        (is (= "AdmissionReview" (:kind response)))
+        (is (= "123abc..." (get-in response [:response :uid])))
+        (is (= true (get-in response [:response :allowed])))))))
+
+(deftest test-handle-mutation
+  (let [mock-logger (reify log/Logger
+                      (fatal [_ _])
+                      (error [_ _])
+                      (warn  [_ _])
+                      (info  [_ _])
+                      (debug [_ _]))
+        mock-k8s-client (fn [& {:keys [gpu-label-map gpu-reservations]
+                               :or   {gpu-label-map {:gpu1 #{"label1"}}
+                                      gpu-reservations {:gpu1 {:pod "other-pod" :namespace "default"}}}}]
+                          (k8s/->K8SClient
+                           (reify k8s/IK8SBaseClient
+                             (invoke [_ {:keys [kind action request]}]
+                               (case [kind action]
+                                 [:Node :get] {:metadata {:annotations {:fudo.org/gpu.device.labels
+                                                                        (core/base64-encode (core/try-json-generate gpu-label-map))
+                                                                        :fudo.org/gpu.device.reservations
+                                                                        (core/try-json-generate gpu-reservations)}}}
+                                 [:Pod :get] (if (= "other-pod" (:name request))
+                                               {:name (:name request) :namespace (:namespace request)}
+                                               (throw (ex-info "Not found" {:type :not-found})))
+                                 [:Node :patch/json] true)))))]
+    (testing "Handle valid mutation request"
+      (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client :gpu-reservations {})}
+            handle-mutation-fn (core/handle-mutation ctx)
+            request {:kind "AdmissionReview"
                      :request {:uid "123abc"
                                :object {:metadata {:name "test-pod"
                                                    :namespace "default"
