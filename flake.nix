@@ -15,6 +15,7 @@
       let
         pkgs = nixpkgs.legacyPackages."${system}";
         helpers = nix-helpers.packages."${system}";
+        cljLibs = { };
       in {
         packages = rec {
           default = gpuDeviceAssigner;
@@ -44,8 +45,7 @@
         devShells = rec {
           default = updateDeps;
           updateDeps = pkgs.mkShell {
-            buildInputs = with helpers.packages."${system}";
-              [ (updateClojureDeps cljLibs) ];
+            buildInputs = [ (helpers.updateClojureDeps cljLibs) ];
           };
           gpuDeviceAssignerServer = pkgs.mkShell {
             buildInputs = with self.packages."${system}"; [ gpuDeviceAssigner ];
