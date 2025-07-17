@@ -22,10 +22,10 @@ The GPU Device Assigner is a Kubernetes admission controller designed to interce
    cd gpu-device-assigner
    ```
 
-2. Build the project:
+2. Deploy the container images:
 
    ```bash
-   lein uberjar
+   nix run .#deployContainers
    ```
 
 ## Configuration
@@ -36,7 +36,7 @@ The application requires several configuration parameters, which can be provided
 - `--ca-certificate`: Path to the base64-encoded CA certificate for Kubernetes.
 - `--kubernetes-url`: URL to the Kubernetes master.
 - `--port`: Port on which to listen for incoming requests (default: 80).
-- `--log-level`: Level at which to log output (default: `:warn`).
+- `--log-level`: Level at which to log output (default: `warn`).
 
 
 ## Testing
@@ -46,11 +46,3 @@ To run the tests, use the following command:
 ```bash
 clojure -M:test
 ```
-
-## Contributing
-
-Contributions are welcome! Please fork the repository and submit a pull request.
-
-## License
-
-This project is licensed under the MIT License.
