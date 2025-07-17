@@ -96,6 +96,10 @@
   [cert-file]
   (-> cert-file (slurp) (str/trim)))
 
+(defn load-access-token
+  [token-file]
+  (-> token-file (slurp) (str/trim)))
+
 (s/fdef create
   :args (s/keys* :req-un [::url ::token ::certificate-authority-data])
   :ret  ::client)

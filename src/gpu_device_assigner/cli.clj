@@ -21,18 +21,18 @@
                     (str/join ", " (map name log/LOG-LEVELS)))]]
    ["-h" "--help" "Print this message."]
 
-   ["-t" "--access-token TOKEN-FILE" "Path to token file for Kubernetes access."
+   ["-t" "--access-token ACCESS-TOKEN" "Path to token file for Kubernetes access."
     :validate [#(.exists (io/as-file %)) "access-token file does not exist"
                #(.canRead (io/as-file %)) "access-token file is not readable"
                #(not (.isDirectory (io/as-file %))) "access-token file not a regular file"]]
-   ["-c" "--ca-certificate CERT-FILE" "Path to base64-encoded CA certificate for Kubernetes"
+   ["-c" "--ca-certificate CA-CERTIFICATE" "Path to base64-encoded CA certificate for Kubernetes"
     :validate [#(.exists (io/as-file %)) "ca-certificate file does not exist"
                #(.canRead (io/as-file %)) "ca-certificate file is not readable"
                #(not (.isDirectory (io/as-file %))) "ca-certificate file not a regular file"]]
    ["-u" "--url URL" "URL to Kubernetes master."]
    ["-p" "--port PORT" "Port on which to listen for incoming requests."
     :default  80
-    :parse-fn Integer/parseInt]])
+    :parse-fn #(Integer/parseInt %)]])
 
 (defn msg-quit
   [status msg]
@@ -59,17 +59,16 @@
 (defn -main
   [& args]
   (let [default-logger (log/print-logger :info)
-        required-args [:access-token :ca-certificate :url :port]
+        required-args #{:access-token :ca-certificate :url :port}
         {:keys [options _ errors summary]} (parse-opts args required-args cli-opts)]
     (when (:help options) (msg-quit 0 (usage summary)))
     (when (seq errors) (msg-quit 1 (usage summary errors)))
     (try
       (let [{:keys [access-token ca-certificate url port log-level]} options
-            access-token (slurp access-token)
             logger (log/print-logger log-level)
             client (k8s/create :url url
-                               :certificate-authority-data ca-certificate
-                               :token access-token)
+                               :certificate-authority-data (k8s/load-certificate ca-certificate)
+                               :token (k8s/load-access-token access-token))
             ctx (ctx/create ::log/logger logger ::k8s/client client)
             shutdown-chan (chan)]
         (.addShutdownHook (Runtime/getRuntime)

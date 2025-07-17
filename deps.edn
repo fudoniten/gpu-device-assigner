@@ -14,6 +14,7 @@
         ring/ring-jetty-adapter {:mvn/version "1.14.2"}
         }
  :aliases {
+           :run {:main-opts [ "-m" "gpu-device-assigner.cli" ]}
            :test {:extra-paths ["test"]
                   :extra-deps {org.clojure/test.check {:mvn/version "1.1.0"}}
                   :main-opts ["-m" "clojure.test"]}
