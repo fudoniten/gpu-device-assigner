@@ -112,7 +112,7 @@
                          pod (str/join ", " requested-labels))))
     (let [reservations (get-device-reservations ctx node-name)
           available (map name (filter (fn [dev-id] (not (device-reserved? ctx reservations dev-id pod)))
-                                     (keys candidates)))]
+                                      (keys candidates)))]
       (if (empty? available)
         (do (log/error logger (format "error: no available devices found for pod %s on node %s." pod node-name))
             nil)
@@ -131,7 +131,7 @@
                       {:body str :exception e})))))
 
 (defn try-json-generate [json]
-    (try
+  (try
     (json/generate-string json true)
     (catch Exception e
       (throw (ex-info "exception encountered when generating json string"
@@ -161,11 +161,11 @@
         (catch Exception e
           (log/error logger (format "error handling request: %s" (str e)))
           (log/debug logger (print-stack-trace
-          (-> {:apiVersion "admission.k8s.io/v1"
-               :kind "AdmissionReview"
-               :response {:uid     uid
-                          :allowed true}}
-              (try-json-generate)))))))))
+                             (-> {:apiVersion "admission.k8s.io/v1"
+                                  :kind "AdmissionReview"
+                                  :response {:uid     uid
+                                             :allowed true}}
+                                 (try-json-generate)))))))))
 
 (defn admission-review-response
   "Create a response for an AdmissionReview request."
@@ -221,12 +221,12 @@
         (do
           (log/info (:logger ctx) (format "Assigned device %s to pod %s on node %s" assigned-device pod node-name))
           (admission-review-response :uid uid :allowed? true
-                                   :patch (device-assignment-patch assigned-device))
+                                     :patch (device-assignment-patch assigned-device)))
         (do
           (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s on node %s" pod node-name))
           (admission-review-response :uid uid :status 500 :allowed? false
-                                   :message (format "failed to find unreserved device for pod %s on node %s."
-                                                    pod node-name))))))
+                                     :message (format "failed to find unreserved device for pod %s on node %s."
+                                                      pod node-name)))))))
 
 (defn app [ctx]
   (ring/ring-handler

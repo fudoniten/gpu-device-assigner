@@ -21,3 +21,4 @@ pom.xml.asc
 /.nrepl-port
 /.prepl-port
 /.cpcache
+/result

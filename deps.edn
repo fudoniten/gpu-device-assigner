@@ -17,6 +17,6 @@
            :run {:main-opts [ "-m" "gpu-device-assigner.cli" ]}
            :test {:extra-paths ["test"]
                   :extra-deps {org.clojure/test.check {:mvn/version "1.1.0"}}
-                  :main-opts ["-m" "clojure.test"]}
+                  :main-opts ["-m" "gpu-device-assigner.all-tests"]}
            }
  }

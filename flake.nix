@@ -22,7 +22,7 @@
 
           gpuDeviceAssigner = helpers.mkClojureBin {
             name = "org.fudo/gpu-device-assigner";
-            primaryNamespace = "gpu-device-assigner.core";
+            primaryNamespace = "gpu-device-assigner.cli";
             src = ./.;
           };
 
