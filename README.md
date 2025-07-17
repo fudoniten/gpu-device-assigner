@@ -38,13 +38,6 @@ The application requires several configuration parameters, which can be provided
 - `--port`: Port on which to listen for incoming requests (default: 80).
 - `--log-level`: Level at which to log output (default: `:warn`).
 
-## Usage
-
-To start the GPU Device Assigner, run the following command with the necessary options:
-
-```bash
-java -jar target/gpu-device-assigner-standalone.jar --access-token <path> --ca-certificate <path> --kubernetes-url <url> --port <port> --log-level <level>
-```
 
 ## Testing
 
