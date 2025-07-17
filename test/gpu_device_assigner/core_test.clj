@@ -132,6 +132,6 @@
                                     [:Pod :get] (throw (ex-info "Not found" {:type :not-found}))
                                     [:Node :patch/json] true))))}
             result (core/assign-device ctx {:node-name "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
-        (is (= "gpu1" result))))))
+        (is (= "gpu1" result)))))
 
 (run-tests 'gpu-device-assigner.core-test)

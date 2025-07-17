@@ -8,7 +8,8 @@
 
             [reitit.ring :as ring]
             [cheshire.core :as json]
-            [ring.util.response :as response])
+            [ring.util.response :as response]
+            [ring.adapter.jetty :as jetty])
   (:import java.util.Base64
            java.time.Instant))
 
@@ -38,7 +39,8 @@
 
 (defn parse-json
   "Parse a JSON string into a Clojure data structure."
-  [str] (json/parse-string str true))
+  [str]
+  (json/parse-string str true))
 
 (defn get-device-labels
   "Get GPU device labels from node annotations."
@@ -46,6 +48,7 @@
   (some->> (get-node-annotations ctx node-name)
            :fudo.org/gpu.device.labels
            (base64-decode)
+           (String.)
            (parse-json)
            (map-vals set)))
 
@@ -66,33 +69,32 @@
 (defn reserve-device
   "Reserve a GPU device for a pod if available."
   [{:keys [logger] :as ctx} {:keys [node-name namespace pod device-id]}]
-  (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node-name)]
-    (if-let [reservation (get reservations device-id)]
-      (if (not= (:pod reservation) pod)
-        (do (log/warn logger (format "device %s is already reserved by pod %s: rejecting" device-id (:pod reservation)))
-            nil)
-        (do (log/info logger (format "device %s is already reserved by requesting pod %s: approving!" device-id (:pod reservation)))
-            true))
-      (let [updated-reservations (assoc reservations device-id {:pod pod :namespace namespace :timestamp (Instant/now)})
-            reservation-patch    {:metadata {:annotations
-                                             {:fudo.org/gpu.device.reservations
-                                              (json/generate-string updated-reservations)}}
-                                  :resourceVersion version}]
-        (try (node-patch ctx node-name reservation-patch)
-             device-id
-             (catch Exception e
-               (let [status (ex-data e)]
-                 (if (= 409 (:status status))
-                   (log/error logger (format "conflict: reservation was modified before patch was applied. unable to reserve device %s for pod %s."
-                                             device-id pod))
-                   (log/error logger (format "error %s: unable to reserve device %s for pod %s: %s"
-                                             (:status status) device-id pod (:message e))))
-                 nil)))))))
+  (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node-name)
+        updated-reservations (assoc reservations (name device-id) {:pod pod :namespace namespace :timestamp (.toString (Instant/now))})
+        reservation-patch    {:metadata {:annotations
+                                         {:fudo.org/gpu.device.reservations
+                                          (json/generate-string updated-reservations)}}
+                              :resourceVersion version}]
+    (try (node-patch ctx node-name reservation-patch)
+         (name device-id)
+         (catch Exception e
+           (println e)
+           (let [status (ex-data e)]
+             (if (= 409 (:status status))
+               (log/error logger (format "conflict: reservation was modified before patch was applied. unable to reserve device %s for pod %s."
+                                         device-id pod))
+               (log/error logger (format "error %s: unable to reserve device %s for pod %s: %s"
+                                         (:status status) device-id pod (:message e))))
+             nil)))))
+
+(defn pthru [val o]
+  (println (str val ": " o))
+  o)
 
 (defn device-reserved?
   "Check if a device is reserved by a different pod and if that pod still exists."
   [{:keys [k8s-client]} reservations dev-id this-pod]
-  (let [reservation (get reservations dev-id)
+  (let [reservation (get-in reservations [:reservations dev-id])
         reserved-pod (:pod reservation)]
     (and reserved-pod
          (not= reserved-pod this-pod)
@@ -105,22 +107,21 @@
         candidates (filter (fn [[_ dev-labels]] (subset? requested-labels dev-labels))
                            node-dev-labels)]
     (when (empty? candidates)
-      (log/error (format "error: no candidate devices found! pod %s was misassigned. requested labels: [%s]"
-                         pod (str/join ", " requested-labels))
-                 nil))
+      (log/error logger
+                 (format "error: no candidate devices found! pod %s was misassigned. requested labels: [%s]"
+                         pod (str/join ", " requested-labels))))
     (let [reservations (get-device-reservations ctx node-name)
-          available (filter (fn [dev-id] (not (device-reserved? ctx reservations dev-id pod)))
-                            (keys candidates))]
+          available (map name (filter (fn [dev-id] (not (device-reserved? ctx reservations dev-id pod)))
+                                     (keys candidates)))]
       (if (empty? available)
-        (do
-          (log/error logger (format "error: no available devices found for pod %s on node %s." pod node-name))
-          nil)
+        (do (log/error logger (format "error: no available devices found for pod %s on node %s." pod node-name))
+            nil)
         (let [selected-id (rand-nth available)]
           (reserve-device ctx
                           {:node-name node-name
                            :namespace namespace
                            :pod       pod
-                           :device-id selected-id}))))))
+                           :device-id (str selected-id)}))))))
 
 (defn try-json-parse [str]
   (try
@@ -212,7 +213,7 @@
           node-name (get-in req [:request :object :spec :nodeName])]
       (if-let [assigned-device (assign-device ctx {:node-name node-name
                                                    :pod       pod
-                                                   :namespace namespace
+                                                   :namespace ns
                                                    :requested-labels labels})]
         (admission-review-response :uid uid :allowed? true
                                    :patch (device-assignment-patch assigned-device))

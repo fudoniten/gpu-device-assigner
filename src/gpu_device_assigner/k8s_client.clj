@@ -8,6 +8,13 @@
            java.net.URL
            java.util.Base64))
 
+(defprotocol IK8SBaseClient
+  (invoke [client req]))
+
+(defrecord K8SBaseClient [client]
+  IK8SBaseClient
+  (invoke [_ req] (k8s/invoke client req)))
+
 (defprotocol IK8SClient
   "Protocol defining Kubernetes client operations."
   (get-node    [self node-name])
@@ -21,24 +28,24 @@
 
   IK8SClient
   (get-node [_ node-name]
-    (k8s/invoke client
-                {:kind    :Node
-                 :action  :get
-                 :request {:name node-name}}))
+    (invoke client
+            {:kind    :Node
+             :action  :get
+             :request {:name node-name}}))
 
   (patch-node [_ node-name patch]
-    (k8s/invoke client
-                {:kind    :Node
-                 :action  :patch/json
-                 :request {:name      node-name
-                           :body      patch}}))
+    (invoke client
+            {:kind    :Node
+             :action  :patch/json
+             :request {:name      node-name
+                       :body      patch}}))
 
   (get-pod [_ pod-name namespace]
-    (k8s/invoke client
-                {:kind    :Pod
-                 :action  :get
-                 :request {:name      pod-name
-                           :namespace namespace}}))
+    (invoke client
+            {:kind    :Pod
+             :action  :get
+             :request {:name      pod-name
+                       :namespace namespace}}))
 
   (pod-exists? [self pod-name namespace]
     (try (boolean (get-pod self pod-name namespace))
@@ -95,6 +102,6 @@
 (defn create
   "Create a new Kubernetes client with the given configuration."
   [& {:keys [url] :as req}]
-  (->K8SClient (k8s/client url (select-keys req [:token :certificate-authority-data]))))
+  (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data])))))
 
 (stest/instrument 'create)

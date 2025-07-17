@@ -33,7 +33,7 @@
 
   (testing "pod-exists? should return false if pod does not exist"
     (let [mock-base-client (reify k8s/IK8SBaseClient
-                             (invoke [_ {:keys [kind action request]}]
+                             (invoke [_ {:keys [kind action
                                (case [kind action]
                                  [:Pod :get] (throw (ex-info "Not found" {:type :not-found})))))
           client (k8s/->K8SClient mock-base-client)]
