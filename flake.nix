@@ -31,7 +31,6 @@
             tags = [ "latest" ];
             entrypoint = [ "${gpuDeviceAssigner}/bin/gpu-device-assigner" ];
             verbose = true;
-            environmentPackages = with pkgs; [ dnsutils ];
           };
         };
 
