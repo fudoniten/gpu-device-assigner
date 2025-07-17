@@ -67,6 +67,7 @@
       (let [{:keys [access-token ca-certificate kubernetes-url port log-level]} options
             logger (log/print-logger log-level)
             client (k8s/create :url kubernetes-url
+                               :timeout 120000 ; Set timeout to 120 seconds
                                :certificate-authority-data (k8s/load-certificate ca-certificate)
                                :token (k8s/load-access-token access-token))
             ctx (ctx/create ::log/logger logger ::k8s/client client)
