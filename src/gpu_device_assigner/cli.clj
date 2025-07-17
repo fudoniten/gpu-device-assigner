@@ -73,10 +73,12 @@
             shutdown-chan (chan)]
         (.addShutdownHook (Runtime/getRuntime)
                           (Thread. (fn [] (>!! shutdown-chan true))))
-        (log/info logger "starting gpu-device-assigner web service...")
+        (log/info logger "Starting gpu-device-assigner web service...")
+        (log/debug logger (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
+                                  access-token ca-certificate kubernetes-url port log-level))
         (let [server (core/start-server ctx port)]
           (<!! shutdown-chan)
-          (log/warn logger "stopping gpu-device-assigner web service...")
+          (log/warn logger "Stopping gpu-device-assigner web service...")
           (.stop server)))
       (catch Exception e
         (log/error default-logger

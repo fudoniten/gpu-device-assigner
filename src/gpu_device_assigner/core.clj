@@ -205,19 +205,26 @@
                     :allowed false
                     :status {:code    400
                              :message (format "Unexpected request kind: %s" kind)}}})
+    (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pr-str req)))
     (let [uid (get-in req [:request :uid])
           pod (get-in req [:request :object :metadata :name])
           ns  (get-in req [:request :object :metadata :namespace])
           annotations (get-in req [:request :object :metadata :annotations])
           labels (keys (filter (fn [[_ v]] (= v "true")) annotations))
           node-name (get-in req [:request :object :spec :nodeName])]
+      (log/debug (:logger ctx) (format "Processing pod: %s in namespace: %s on node: %s with requested labels: %s"
+                                       pod ns node-name (str/join ", " labels)))
       (if-let [assigned-device (assign-device ctx {:node-name node-name
                                                    :pod       pod
                                                    :namespace ns
                                                    :requested-labels labels})]
-        (admission-review-response :uid uid :allowed? true
+        (do
+          (log/info (:logger ctx) (format "Assigned device %s to pod %s on node %s" assigned-device pod node-name))
+          (admission-review-response :uid uid :allowed? true
                                    :patch (device-assignment-patch assigned-device))
-        (admission-review-response :uid uid :status 500 :allowed? false
+        (do
+          (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s on node %s" pod node-name))
+          (admission-review-response :uid uid :status 500 :allowed? false
                                    :message (format "failed to find unreserved device for pod %s on node %s."
                                                     pod node-name))))))
 
