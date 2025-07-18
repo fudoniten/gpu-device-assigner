@@ -30,11 +30,6 @@
                #(.canRead (io/as-file %)) "ca-certificate file is not readable"
                #(not (.isDirectory (io/as-file %))) "ca-certificate file not a regular file"]]
    ["-k" "--kubernetes-url URL" "URL to Kubernetes master."]
-   ["-s" "--keystore KEYSTORE" "pkcs12 keystore containing server certificate."
-    :validate [#(.exists (io/as-file %)) "keystore file does not exist"
-               #(.canRead (io/as-file %)) "keystore file is not readable"
-               #(not (.isDirectory (io/as-file %))) "keystore file not a regular file"]]
-   ["-P" "--keystore-password PASSWD" "password for pkcs12 keystore."]
    ["-p" "--port PORT" "Port on which to listen for incoming requests."
     :default  443
     :parse-fn #(Integer/parseInt %)]])
@@ -64,13 +59,13 @@
 (defn -main
   [& args]
   (let [default-logger (log/print-logger :info)
-        required-args #{:access-token :ca-certificate :kubernetes-url :port :keystore :keystore-password}
+        required-args #{:access-token :ca-certificate :kubernetes-url :port}
         {:keys [options _ errors summary]} (parse-opts args required-args cli-opts)]
     (when (:help options) (msg-quit 0 (usage summary)))
     (when (seq errors) (msg-quit 1 (usage summary errors)))
     (log/info default-logger "starting gpu-device-assigner...")
     (try
-      (let [{:keys [access-token ca-certificate kubernetes-url port log-level keystore keystore-password]} options
+      (let [{:keys [access-token ca-certificate kubernetes-url port log-level]} options
             logger (log/print-logger log-level)
             client (k8s/create :url kubernetes-url
                                :timeout 120000 ; Set timeout to 120 seconds
@@ -85,9 +80,9 @@
                                      (log/info logger "received shutdown request")
                                      (>!! shutdown-chan true))))
         (log/info logger "Starting gpu-device-assigner web service...")
-        (log/debug logger (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s, keystore=%s"
-                                  access-token ca-certificate kubernetes-url port log-level keystore))
-        (let [server (core/start-server ctx port keystore keystore-password)]
+        (log/debug logger (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
+                                  access-token ca-certificate kubernetes-url port log-level))
+        (let [server (core/start-server ctx port)]
           (<!! shutdown-chan)
           (log/warn logger "Stopping gpu-device-assigner web service...")
           (.stop server)))
