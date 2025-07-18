@@ -67,22 +67,25 @@
         {:keys [options _ errors summary]} (parse-opts args required-args cli-opts)]
     (when (:help options) (msg-quit 0 (usage summary)))
     (when (seq errors) (msg-quit 1 (usage summary errors)))
+    (log/info default-logger "starting gpu-device-assigner...")
     (try
       (let [{:keys [access-token ca-certificate kubernetes-url port log-level keystore]} options
             logger (log/print-logger log-level)
             client (k8s/create :url kubernetes-url
                                :timeout 120000 ; Set timeout to 120 seconds
                                :certificate-authority-data (k8s/load-certificate ca-certificate)
-                               :token (k8s/load-access-token access-token))
+                               :token (k8s/load-access-token access-token)
+                               :logger logger)
             ctx (ctx/create ::log/logger logger ::k8s/client client)
             shutdown-chan (chan)]
+        (log/debug logger "creating shutdown hook...")
         (.addShutdownHook (Runtime/getRuntime)
                           (Thread. (fn []
                                      (log/info logger "received shutdown request")
                                      (>!! shutdown-chan true))))
         (log/info logger "Starting gpu-device-assigner web service...")
-        (log/debug logger (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
-                                  access-token ca-certificate kubernetes-url port log-level))
+        (log/debug logger (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s, keystore=%s"
+                                  access-token ca-certificate kubernetes-url port log-level keystore))
         (let [server (core/start-server ctx port keystore)]
           (<!! shutdown-chan)
           (log/warn logger "Stopping gpu-device-assigner web service...")

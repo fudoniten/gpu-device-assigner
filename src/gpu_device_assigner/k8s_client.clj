@@ -3,6 +3,8 @@
             [clojure.spec.test.alpha :as stest]
             [clojure.string :as str]
 
+            [gpu-device-assigner.logging :as log]
+
             [kubernetes-api.core :as k8s])
   (:import clojure.lang.ExceptionInfo
            java.net.URL
@@ -109,11 +111,15 @@
   (-> token-file (slurp) (str/trim)))
 
 (s/fdef create
-  :args (s/keys* :req-un [::url ::token ::certificate-authority-data])
+  :args (s/keys* :req-un [::url ::token ::certificate-authority-data :log/logger])
   :ret  ::client)
 (defn create
   "Create a new Kubernetes client with the given configuration."
-  [& {:keys [url] :as req}]
-  (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data])))))
+  [& {:keys [logger url] :as req}]
+  (try
+    (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data]))))
+    (catch Exception e
+      (log/fatal logger (str "failed to create k8s-client: " (.getMessage e)))
+      (throw (ex-info "failed to create k8s-client" {:error e})))))
 
 (stest/instrument 'create)
