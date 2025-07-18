@@ -145,6 +145,8 @@
     (if-let [body {:body req}]
       (do (println (str "GOT BODY: " body))
           (-> body
+              :body
+              :body ;; Who knows wtf??
               (slurp)
               (try-json-parse)
               (handler)
