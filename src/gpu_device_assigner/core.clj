@@ -133,7 +133,7 @@
 
 (defn try-json-generate [json]
   (try
-    (json/generate-string json true)
+    (json/generate-string json)
     (catch Exception e
       (throw (ex-info "exception encountered when generating json string"
                       {:body str :exception e})))))
@@ -166,7 +166,10 @@
                                   :kind "AdmissionReview"
                                   :response {:uid     uid
                                              :allowed true}}
-                                 (try-json-generate)))))))))
+                                 (try-json-generate))))
+          {:status 500
+           :headers {:Content-Type "application/json"}
+           :body    (json/generate-string {:error (.getMessage e)})})))))
 
 (defn admission-review-response
   "Create a response for an AdmissionReview request."
