@@ -236,8 +236,8 @@
 
 (defn start-server
   "Start the web server with the given context and port."
-  [ctx port keystore]
-  (jetty/run-jetty (app ctx) {:port port :join? false :ssl? true :keystore keystore}))
+  [ctx port keystore keystore-password]
+  (jetty/run-jetty (app ctx) {:port port :join? false :ssl? true :keystore keystore :key-password keystore-password}))
 
 
 ;; {
