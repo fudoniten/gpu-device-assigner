@@ -251,7 +251,8 @@
    (ring/router [["/mutate" {:post (handle-mutation ctx)}]]
                 {:data {:middleware [json-middleware
                                      (open-fail-middleware ctx)
-                                     (log-requests-middleware ctx)]}})))
+                                     (log-requests-middleware ctx)]}})
+   (constantly {:status 404 :body "not found"})))
 
 (defn start-server
   "Start the web server with the given context and port."
