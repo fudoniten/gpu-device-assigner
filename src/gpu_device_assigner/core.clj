@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.stacktrace :refer [print-stack-trace]]
             [clojure.set :refer [subset?]]
+            [clojure.pprint :refer [pprint]]
 
             [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
@@ -194,10 +195,24 @@
       (json/generate-string)
       (base64-encode)))
 
+(defn pprint-string [o]
+  (with-out-str (pprint o)))
+
+(defn log-requests-middleware
+  [{:keys [logger]}]
+  (fn [handler]
+    (fn [req]
+      (log/debug logger (pprint-string req))
+      (let [res (handler req)]
+        (log/debug logger (pprint-string res))
+        res))))
+
 (defn handle-mutation
   "Handle an AdmissionReview request for mutating a pod's annotations."
-  [ctx]
+  [{:keys [logger] :as ctx}]
   (fn [{:keys [kind] :as req}]
+    (log/debug logger "REQUEST")
+    (log/debug logger (pprint-string req))
     (when-not (= kind "AdmissionReview")
       {:apiVersion "admission.k8s.io/v1"
        :kind       "AdmissionReview"
@@ -232,7 +247,8 @@
   (ring/ring-handler
    (ring/router [["/mutate" {:post (handle-mutation ctx)}]]
                 {:data {:middleware [json-middleware
-                                     (open-fail-middleware ctx)]}})))
+                                     (open-fail-middleware ctx)
+                                     (log-requests-middleware ctx)]}})))
 
 (defn start-server
   "Start the web server with the given context and port."
