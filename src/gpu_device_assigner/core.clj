@@ -242,7 +242,7 @@
                        (.setDumpBeforeStop server true)
                        (.setStopAtShutdown server  true))]
     (jetty/run-jetty (app ctx)
-                     {:port port
+                     {:ssl-port port
                       :join? false
                       :ssl? true
                       :keystore keystore
