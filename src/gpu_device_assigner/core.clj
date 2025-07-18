@@ -237,18 +237,13 @@
 (defn start-server
   "Start the web server with the given context and port."
   [ctx port keystore keystore-password]
-  (let [configurator (fn [server]
-                       (.setDumpAfterStart server true)
-                       (.setDumpBeforeStop server true)
-                       (.setStopAtShutdown server  true))]
-    (jetty/run-jetty (app ctx)
-                     {:ssl-port port
-                      :join? false
-                      :ssl? true
-                      :keystore keystore
-                      :keystore-type "PKCS12"
-                      :key-password keystore-password
-                      :configurator configurator})))
+  (jetty/run-jetty (app ctx)
+                   {:ssl-port port
+                    :join? false
+                    :ssl? true
+                    :keystore keystore
+                    :keystore-type "PKCS12"
+                    :key-password keystore-password}))
 
 
 ;; {
