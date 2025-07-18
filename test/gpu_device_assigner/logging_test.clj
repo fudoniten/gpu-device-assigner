@@ -1,5 +1,5 @@
 (ns gpu-device-assigner.logging-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is testing run-tests]]
             [gpu-device-assigner.logging :as log]))
 
 (deftest test-print-logger
@@ -42,3 +42,5 @@
       (is (= "Warn message\n" (with-out-str (log/warn logger "Warn message"))))
       (is (= "Info message\n" (with-out-str (log/info logger "Info message"))))
       (is (= "Debug message\n" (with-out-str (log/debug logger "Debug message")))))))
+
+(run-tests)
