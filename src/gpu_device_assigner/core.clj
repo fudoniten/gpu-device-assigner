@@ -256,7 +256,8 @@
   (jetty/run-jetty (app ctx)
                    {:port port
                     :join? false
-                    :ssl? false}))
+                    :ssl? false
+                    :host "0.0.0.0"}))
 
 
 ;; {
