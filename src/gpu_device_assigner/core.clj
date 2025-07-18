@@ -239,7 +239,7 @@
   [ctx port keystore keystore-password]
   (let [configurator (fn [server]
                        (.setDumpAfterStart server true)
-                       (.setDumpBeforeStart server true)
+                       (.setDumpBeforestop server true)
                        (.setStopAtShutdown server  true))]
     (jetty/run-jetty (app ctx)
                      {:port port
