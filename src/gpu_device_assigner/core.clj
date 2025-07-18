@@ -205,9 +205,9 @@
   [{:keys [logger]}]
   (fn [handler]
     (fn [req]
-      (log/debug logger (pprint-string req))
+      (log/debug logger (str "\n\n##########\n# REQUEST\n##########\n\n" (pprint-string req)))
       (let [res (handler req)]
-        (log/debug logger (pprint-string res))
+        (log/debug logger (str "\n\n##########\n# RESPONSE\n##########\n\n" (pprint-string res)))
         res))))
 
 (defn handle-mutation
