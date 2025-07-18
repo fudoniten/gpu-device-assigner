@@ -249,9 +249,9 @@
 (defn app [ctx]
   (ring/ring-handler
    (ring/router [["/mutate" {:post (handle-mutation ctx)}]]
-                {:data {:middleware [json-middleware
-                                     (open-fail-middleware ctx)
-                                     (log-requests-middleware ctx)]}})
+                {:data {:middleware [(log-requests-middleware ctx)
+                                     json-middleware
+                                     (open-fail-middleware ctx)]}})
    (constantly {:status 404 :body "not found"})))
 
 (defn start-server
