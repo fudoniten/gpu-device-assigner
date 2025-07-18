@@ -143,13 +143,14 @@
   [handler]
   (fn [req]
     (if-let [body {:body req}]
-      (-> body
-          (slurp)
-          (try-json-parse)
-          (handler)
-          (try-json-generate)
-          (response/response)
-          (assoc-in [:headers "Content-Type"] "application/json"))
+      (do (println (str "GOT BODY: " body))
+          (-> body
+              (slurp)
+              (try-json-parse)
+              (handler)
+              (try-json-generate)
+              (response/response)
+              (assoc-in [:headers "Content-Type"] "application/json")))
       (throw (ex-info "missing request body!" {:req req})))))
 
 (defn open-fail-middleware
