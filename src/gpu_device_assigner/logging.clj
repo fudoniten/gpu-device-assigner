@@ -19,23 +19,23 @@
     (reify Logger
 
       (fatal [_ msg]
-        (when (<= log-idx (log-index :fatal))
+        (when (<= (log-index :fatal) log-idx)
           (println msg)))
 
       (error [_ msg]
-        (when (<= log-idx (log-index :error))
+        (when (<= (log-index :error) log-idx)
           (println msg)))
 
       (warn [_ msg]
-        (when (<= log-idx (log-index :warn))
+        (when (<= (log-index :warn) log-idx)
           (println msg)))
 
       (info [_ msg]
-        (when (<= log-idx (log-index :info))
+        (when (<= (log-index :info) log-idx)
           (println msg)))
 
       (debug [_ msg]
-        (when (<= log-idx (log-index :debug))
+        (when (<= (log-index :debug) log-idx)
           (println msg))))))
 
 (defn logger?
