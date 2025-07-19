@@ -268,9 +268,9 @@
           (log/error logger (format "error handling request: %s" (str e)))
           (log/debug logger (print-stack-trace
                              (-> {:apiVersion "admission.k8s.io/v1"
-                                  :kind "AdmissionReview"
-                                  :response {:uid     uid
-                                             :allowed true}}
+                                  :kind       "AdmissionReview"
+                                  :response   {:uid     uid
+                                               :allowed true}}
                                  (try-json-generate))))
           {:status 500
            :headers {:Content-Type "application/json"}
@@ -285,10 +285,10 @@
   {:apiVersion "admission.k8s.io/v1"
    :kind       "AdmissionReview"
    :response   (if status
-                 {:uid     uid
-                  :allowed allowed?
-                  :status  {:code    status
-                            :message message}}
+                 {:uid       uid
+                  :allowed   allowed?
+                  :status    {:code    status
+                              :message message}}
                  {:uid       uid
                   :allowed   allowed?
                   :patchType "JSONPatch"

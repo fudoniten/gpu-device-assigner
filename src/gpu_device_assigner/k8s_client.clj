@@ -28,41 +28,55 @@
 (defprotocol IK8SClient
   "Protocol defining Kubernetes client operations."
   (get-node    [self node-name])
+  (get-nodes   [self])
   (patch-node  [self node-name patch])
 
   (get-pod     [self pod-name namespace])
+  (get-pods    [self])
   (pod-exists? [self pod-name namespace]))
 
 (defrecord K8SClient
     [client]
 
-  IK8SClient
-  (get-node [_ node-name]
-    (invoke client
-            {:kind    :Node
-             :action  :get
-             :request {:name node-name}}))
+    IK8SClient
+    (get-node [_ node-name]
+      (invoke client
+              {:kind    :Node
+               :action  :get
+               :request {:name node-name}}))
 
-  (patch-node [_ node-name patch]
-    (invoke client
-            {:kind    :Node
-             :action  :patch/json
-             :request {:name      node-name
-                       :body      patch}}))
+    (get-nodes [_]
+      (-> client
+          (invoke {:kind    :Node
+                   :action  :list})
+          :items))
 
-  (get-pod [_ pod-name namespace]
-    (invoke client
-            {:kind    :Pod
-             :action  :get
-             :request {:name      pod-name
-                       :namespace namespace}}))
+    (patch-node [_ node-name patch]
+      (invoke client
+              {:kind    :Node
+               :action  :patch/json
+               :request {:name      node-name
+                         :body      patch}}))
 
-  (pod-exists? [self pod-name namespace]
-    (try (boolean (get-pod self pod-name namespace))
-         (catch ExceptionInfo e
-           (if (= (:type (ex-data e)) :not-found)
-             false
-             (throw e))))))
+    (get-pod [_ pod-name namespace]
+      (invoke client
+              {:kind    :Pod
+               :action  :get
+               :request {:name      pod-name
+                         :namespace namespace}}))
+
+    (get-pods [_]
+      (invoke client
+              {:kind    :Pod
+               :action  :list
+               :request {:raw-path "/api/v1/pods"}}))
+
+    (pod-exists? [self pod-name namespace]
+      (try (boolean (get-pod self pod-name namespace))
+           (catch ExceptionInfo e
+             (if (= (:type (ex-data e)) :not-found)
+               false
+               (throw e))))))
 
 (defn base64-string?
   "Check if a string is a valid Base64 encoded string."
