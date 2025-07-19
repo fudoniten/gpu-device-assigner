@@ -66,11 +66,16 @@
 (defn get-device-reservations
   "Retrieve current device reservations from node annotations."
   [ctx node-name]
-  (let [annotations (get-node-annotations ctx node-name)]
-    (some->> annotations
-             :fudo.org/gpu.device.reservations
-             (parse-json)
-             (assoc (select-keys annotations [:resourceVersion]) :reservations))))
+  (try
+    (let [annotations (get-node-annotations ctx node-name)]
+      (some->> annotations
+               :fudo.org/gpu.device.reservations
+               (parse-json)
+               (assoc (select-keys annotations [:resourceVersion]) :reservations)))
+    (catch Exception e
+      (throw (ex-info "Failed to retrieve device reservations"
+                      {:node-name node-name
+                       :exception e})))))
 
 (s/def ::device-labels
   (s/map-of ::device-id
@@ -162,18 +167,29 @@
     (get reservations device-id)))
 
 (defn pick-device [ctx labels]
-  (let [device-labels (get-all-device-labels ctx)
-        matching      (find-matching-devices device-labels labels)
-        reservations  (-> (get-all-device-reservations ctx) (keys) (set))
-        available     (filter (fn [[dev-id _]] (some reservations dev-id)) matching)]
-    (if-let [selected-id (rand-nth (keys available))]
-      {:device-id selected-id :node (-> available selected-id :node-name)}
-      nil)))
+  (try
+    (let [device-labels (get-all-device-labels ctx)
+          matching      (find-matching-devices device-labels labels)
+          reservations  (-> (get-all-device-reservations ctx) (keys) (set))
+          available     (filter (fn [[dev-id _]] (some reservations dev-id)) matching)]
+      (if-let [selected-id (rand-nth (keys available))]
+        {:device-id selected-id :node (-> available selected-id :node-name)}
+        nil))
+    (catch Exception e
+      (throw (ex-info "Failed to pick device"
+                      {:labels labels
+                       :exception e})))))
 
 (defn node-patch
   "Apply a patch to a Kubernetes node."
   [{:keys [k8s-client]} node-name patch]
-  (k8s/patch-node k8s-client node-name patch))
+  (try
+    (k8s/patch-node k8s-client node-name patch)
+    (catch Exception e
+      (throw (ex-info "Failed to patch node"
+                      {:node-name node-name
+                       :patch patch
+                       :exception e})))))
 
 (defn reserve-device
   [{:keys [logger] :as ctx} node device-id pod namespace]
