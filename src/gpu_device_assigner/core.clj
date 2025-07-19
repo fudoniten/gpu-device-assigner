@@ -296,10 +296,16 @@
 
 (defn device-assignment-patch
   "Generate a JSON patch for assigning a device to a pod."
-  [device-id]
-  (-> {:op    "add"
-       :path  "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu"
-       :value device-id}
+  [device-id node]
+  (-> [{:op    "add"
+        :path  "/metadata/annotations"
+        :value {}}
+       {:op    "add"
+        :path  "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu"
+        :value device-id}
+       {:op    "add"
+        :path  "/spec/nodeName"
+        :value node}]
       (json/generate-string)
       (base64-encode)))
 
@@ -327,21 +333,21 @@
                     :status {:code    400
                              :message (format "Unexpected request kind: %s" kind)}}})
     (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pr-str req)))
-    (let [uid (get-in req [:request :uid])
-          pod (get-in req [:request :object :metadata :name])
-          ns  (get-in req [:request :object :metadata :namespace])
-          annotations (get-in req [:request :object :metadata :annotations])
+    (let [uid              (get-in req [:request :uid])
+          pod              (get-in req [:request :object :metadata :generateName])
+          namespace        (get-in req [:request :object :metadata :namespace])
+          annotations      (get-in req [:request :object :metadata :annotations])
           requested-labels (keys (filter (fn [[_ v]] (= v "true")) annotations))]
       (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                namespace pod (str/join "," (map name requested-labels))))
       (if-let [{:keys [device-id pod node]} (assign-device ctx
-                                                                     {:pod       pod
-                                                                      :namespace ns
-                                                                      :requested-labels requested-labels})]
+                                                           {:pod       pod
+                                                            :namespace ns
+                                                            :requested-labels requested-labels})]
         (do
           (log/info (:logger ctx) (format "Assigned device %s to pod %s/%s on node %s" device-id ns pod node))
           (admission-review-response :uid uid :allowed? true
-                                     :patch (device-assignment-patch device-id)))
+                                     :patch (device-assignment-patch device-id node)))
         (do
           (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s/%s" ns pod))
           (admission-review-response :uid uid :status 500 :allowed? false
