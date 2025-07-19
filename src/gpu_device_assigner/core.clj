@@ -342,16 +342,16 @@
                                namespace pod (str/join "," (map name requested-labels))))
       (if-let [{:keys [device-id pod node]} (assign-device ctx
                                                            {:pod       pod
-                                                            :namespace ns
+                                                            :namespace namespace
                                                             :requested-labels requested-labels})]
         (do
-          (log/info (:logger ctx) (format "Assigned device %s to pod %s/%s on node %s" device-id ns pod node))
+          (log/info (:logger ctx) (format "Assigned device %s to pod %s/%s on node %s" device-id namespace pod node))
           (admission-review-response :uid uid :allowed? true
                                      :patch (device-assignment-patch device-id node)))
         (do
-          (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s/%s" ns pod))
+          (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s/%s" namespace pod))
           (admission-review-response :uid uid :status 500 :allowed? false
-                                     :message (format "failed to find unreserved device for pod %s/%s." ns pod)))))))
+                                     :message (format "failed to find unreserved device for pod %s/%s." namespace pod)))))))
 
 (defn app [ctx]
   (ring/ring-handler
