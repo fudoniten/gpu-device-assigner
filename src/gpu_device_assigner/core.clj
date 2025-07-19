@@ -3,7 +3,9 @@
             [clojure.stacktrace :refer [print-stack-trace]]
             [clojure.set :refer [subset?]]
             [clojure.pprint :refer [pprint]]
+            [clojure.spec.alpha :as s]
 
+            [gpu-device-assigner.context :as context]
             [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
 
@@ -20,6 +22,14 @@
   (-> (k8s/get-node k8s-client node-name)
       :metadata
       :annotations))
+
+(defn get-all-node-annotations
+  [{:keys [k8s-client]}]
+  (into {}
+        (map (fn [node]
+               [(-> node :metadata :name)
+                (-> node :metadata :annotations)]))
+        (k8s/get-nodes k8s-client)))
 
 (defn base64-encode
   "Encode a string to Base64."
@@ -62,24 +72,120 @@
              (parse-json)
              (assoc (select-keys annotations [:resourceVersion]) :reservations))))
 
+(s/def ::device-labels
+  (s/map-of ::device-id
+            (s/keys :req-un [::node-name ::device-labels])))
+
+(s/fdef -unpack-device-labels
+  :args (s/cat :annotations (s/map-of symbol? any?))
+  :ret  ::device-labels)
+(defn -unpack-device-labels
+  [annotations]
+  (some-> annotations
+          :fudo.org/gpu.device.labels
+          (base64-decode)
+          (String.)
+          (parse-json)))
+
+(s/def ::pod string?)
+(s/def ::namespace string?)
+(s/def ::timestamp string?)
+
+(defn pthru [o] (clojure.pprint/pprint o) o)
+
+(s/def ::device-reservations
+  (s/map-of ::device-id (s/keys :req-un [::pod ::namespace ::timestamp])))
+
+(s/fdef -unpack-device-reservations
+  :args (s/cat :annotations (s/map-of symbol? any?))
+  :ret  ::device-reservations)
+(defn -unpack-device-reservations
+  [annotations]
+  (some-> annotations
+          :fudo.org/gpu.device.reservations
+          (base64-decode)
+          (String.)
+          (parse-json)))
+
+(s/fdef get-all-device-labels
+  :args ::context/context
+  :ret  ::device-labels)
+(defn get-all-device-labels
+  [ctx]
+  (apply merge
+         (map (fn [[node annos]]
+                (into {}
+                      (map (fn [[device labels]]
+                             [device {:node-name node
+                                      :labels (set (map keyword labels))}]))
+                      (-unpack-device-labels annos)))
+              (get-all-node-annotations ctx))))
+
+(s/fdef find-available-devices
+  :args (s/cat :devices          ::device-labels
+               :reserved-devices (s/coll-of ::device-id))
+  :ret  ::device-labels)
+(defn find-available-devices
+  [devices reserved-devices]
+  (into {}
+        (filter
+         (fn [[device _]]
+           (some #(= device %) reserved-devices)))
+        devices))
+
+(s/fdef find-matching-devices
+  :args (s/cat :device-labels ::device-labels
+               :req-labels (s/and set? (s/coll-of ::device-label)))
+  :ret  ::device-labels)
+(defn find-matching-devices
+  [device-labels req-labels]
+  (into {}
+        (filter
+         (fn [[_ {labels ::device-labels}]]
+           (subset? req-labels labels)))
+        device-labels))
+
+(s/fdef get-all-device-reservations
+  :args (s/cat :ctx ::context/context)
+  :ret  ::device-reservations)
+(defn get-all-device-reservations
+  [{:keys [k8s-client] :as ctx}]
+  (into {}
+        (for [[_ node-annos] (get-all-node-annotations ctx)
+              [device-id {:keys [pod namespace] :as reservation}] (-unpack-device-reservations node-annos)
+              :when (k8s/pod-exists? k8s-client pod namespace)]
+          [device-id reservation])))
+
+(defn device-reserved?
+  [ctx device-id]
+  (let [reservations (get-all-device-reservations ctx)]
+    (get reservations device-id)))
+
+(defn pick-device [ctx labels]
+  (let [device-labels (get-all-device-labels ctx)
+        matching      (find-matching-devices device-labels labels)
+        reservations  (-> (get-all-device-reservations ctx) (keys) (set))
+        available     (filter (fn [[dev-id _]] (some reservations dev-id)) matching)]
+    (if-let [selected-id (rand-nth (keys available))]
+      {:device-id selected-id :node (-> available selected-id :node-name)}
+      nil)))
+
 (defn node-patch
   "Apply a patch to a Kubernetes node."
   [{:keys [k8s-client]} node-name patch]
   (k8s/patch-node k8s-client node-name patch))
 
 (defn reserve-device
-  "Reserve a GPU device for a pod if available."
-  [{:keys [logger] :as ctx} {:keys [node-name namespace pod device-id]}]
-  (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node-name)
+  [{:keys [logger] :as ctx} node device-id pod namespace]
+  (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node)
         updated-reservations (assoc reservations (name device-id) {:pod pod :namespace namespace :timestamp (.toString (Instant/now))})
-        reservation-patch    {:metadata {:annotations
-                                         {:fudo.org/gpu.device.reservations
-                                          (json/generate-string updated-reservations)}}
-                              :resourceVersion version}]
-    (try (node-patch ctx node-name reservation-patch)
-         (name device-id)
+        reservation-patch {:metadata {:annotations
+                                      {:fudo.org/gpu.device.reservations
+                                       (json/generate-string updated-reservations)}}
+                           :resourceVersion version}]
+    (try (node-patch ctx node reservation-patch)
+         {:device-id device-id :pod pod :namespace namespace :node node}
          (catch Exception e
-           (println e)
            (let [status (ex-data e)]
              (if (= 409 (:status status))
                (log/error logger (format "conflict: reservation was modified before patch was applied. unable to reserve device %s for pod %s."
@@ -88,41 +194,21 @@
                                          (:status status) device-id pod (:message e))))
              nil)))))
 
-(defn pthru [val o]
-  (println (str val ": " o))
-  o)
-
-(defn device-reserved?
-  "Check if a device is reserved by a different pod and if that pod still exists."
-  [{:keys [k8s-client]} reservations dev-id this-pod]
-  (let [reservation (get-in reservations [:reservations dev-id])
-        reserved-pod (:pod reservation)]
-    (and reserved-pod
-         (not= reserved-pod this-pod)
-         (k8s/pod-exists? k8s-client reserved-pod (:namespace reservation)))))
-
 (defn assign-device
   "Assign a GPU device to a pod based on requested labels."
-  [{:keys [logger] :as ctx} {:keys [node-name pod namespace requested-labels]}]
-  (let [node-dev-labels (get-device-labels ctx node-name)
-        candidates (filter (fn [[_ dev-labels]] (subset? requested-labels dev-labels))
-                           node-dev-labels)]
-    (when (empty? candidates)
-      (log/error logger
-                 (format "error: no candidate devices found! pod %s was misassigned. requested labels: [%s]"
-                         pod (str/join ", " requested-labels))))
-    (let [reservations (get-device-reservations ctx node-name)
-          available (map name (filter (fn [dev-id] (not (device-reserved? ctx reservations dev-id pod)))
-                                      (keys candidates)))]
-      (if (empty? available)
-        (do (log/error logger (format "error: no available devices found for pod %s on node %s." pod node-name))
-            nil)
-        (let [selected-id (rand-nth available)]
-          (reserve-device ctx
-                          {:node-name node-name
-                           :namespace namespace
-                           :pod       pod
-                           :device-id (str selected-id)}))))))
+  [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels]}]
+  (if-let [{:keys [device-id node]} (pick-device ctx requested-labels)]
+    (do (log/info logger
+                  (format "attempting to reserve device %s on node %s to pod %s/%s"
+                          device-id node namespace pod))
+        (reserve-device ctx node device-id pod namespace))
+    (do (log/error logger
+                   (format "unable to find device to reserve for pod %s/%s, labels [%s]"
+                           namespace pod (str/join "," (map name requested-labels))))
+        (ex-info (format "unable to find device to reserve for pod %s/%s" namespace pod)
+                 {:pod       pod
+                  :namespace namespace
+                  :labels    requested-labels}))))
 
 (defn try-json-parse [str]
   (try
@@ -217,8 +303,6 @@
   "Handle an AdmissionReview request for mutating a pod's annotations."
   [{:keys [logger] :as ctx}]
   (fn [{:keys [kind] :as req}]
-    (log/debug logger "REQUEST")
-    (log/debug logger (pprint-string req))
     (when-not (= kind "AdmissionReview")
       {:apiVersion "admission.k8s.io/v1"
        :kind       "AdmissionReview"
@@ -231,23 +315,21 @@
           pod (get-in req [:request :object :metadata :name])
           ns  (get-in req [:request :object :metadata :namespace])
           annotations (get-in req [:request :object :metadata :annotations])
-          labels (keys (filter (fn [[_ v]] (= v "true")) annotations))
-          node-name (get-in req [:request :object :spec :nodeName])]
-      (log/debug (:logger ctx) (format "Processing pod: %s in namespace: %s on node: %s with requested labels: %s"
-                                       pod ns node-name (str/join ", " labels)))
-      (if-let [assigned-device (assign-device ctx {:node-name node-name
-                                                   :pod       pod
-                                                   :namespace ns
-                                                   :requested-labels labels})]
+          requested-labels (keys (filter (fn [[_ v]] (= v "true")) annotations))]
+      (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
+                               namespace pod (str/join "," (map name requested-labels))))
+      (if-let [{:keys [device-id pod node]} (assign-device ctx
+                                                                     {:pod       pod
+                                                                      :namespace ns
+                                                                      :requested-labels requested-labels})]
         (do
-          (log/info (:logger ctx) (format "Assigned device %s to pod %s on node %s" assigned-device pod node-name))
+          (log/info (:logger ctx) (format "Assigned device %s to pod %s/%s on node %s" device-id ns pod node))
           (admission-review-response :uid uid :allowed? true
-                                     :patch (device-assignment-patch assigned-device)))
+                                     :patch (device-assignment-patch device-id)))
         (do
-          (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s on node %s" pod node-name))
+          (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s/%s" ns pod))
           (admission-review-response :uid uid :status 500 :allowed? false
-                                     :message (format "failed to find unreserved device for pod %s on node %s."
-                                                      pod node-name)))))))
+                                     :message (format "failed to find unreserved device for pod %s/%s." ns pod)))))))
 
 (defn app [ctx]
   (ring/ring-handler
@@ -265,7 +347,6 @@
                     :join? false
                     :ssl? false
                     :host "0.0.0.0"}))
-
 
 ;; {
 ;;   "apiVersion": "admission.k8s.io/v1",
