@@ -301,10 +301,10 @@
         :value {}}
        {:op    "add"
         :path  "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu"
-        :value device-id}
+        :value (name device-id)}
        {:op    "add"
         :path  "/spec/nodeName"
-        :value node}]
+        :value (name node)}]
       (json/generate-string)
       (base64-encode)))
 
