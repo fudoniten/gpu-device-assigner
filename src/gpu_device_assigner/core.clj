@@ -245,16 +245,15 @@
   [handler]
   (fn [req]
     (if-let [body {:body req}]
-      (do (println (str "GOT BODY: " body))
-          (-> body
-              :body
-              :body ;; Who knows wtf??
-              (slurp)
-              (try-json-parse)
-              (handler)
-              (try-json-generate)
-              (response/response)
-              (assoc-in [:headers "Content-Type"] "application/json")))
+      (-> body
+          :body
+          :body ;; Who knows wtf??
+          (slurp)
+          (try-json-parse)
+          (handler)
+          (try-json-generate)
+          (response/response)
+          (assoc-in [:headers "Content-Type"] "application/json"))
       (throw (ex-info "missing request body!" {:req req})))))
 
 (defn open-fail-middleware
@@ -333,11 +332,16 @@
                     :status {:code    400
                              :message (format "Unexpected request kind: %s" kind)}}})
     (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pr-str req)))
-    (let [uid              (get-in req [:request :uid])
+    (let [fudo-label?      (filter (fn [[k _]] (= "fudo.org" (namespace k))))
+          label-enabled?   (filter (fn [[_ v]] v))
+          uid              (get-in req [:request :uid])
           pod              (get-in req [:request :object :metadata :generateName])
           namespace        (get-in req [:request :object :metadata :namespace])
-          annotations      (get-in req [:request :object :metadata :annotations])
-          requested-labels (keys (filter (fn [[_ v]] (= v "true")) annotations))]
+          all-labels       (get-in req [:request :object :metadata :labels])
+          requested-labels (keys (filter (fn [label]
+                                           (and (fudo-label? label)
+                                                (label-enabled? label)))
+                                         all-labels))]
       (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                namespace pod (str/join "," (map name requested-labels))))
       (if-let [{:keys [device-id pod node]} (assign-device ctx
