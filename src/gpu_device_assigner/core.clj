@@ -351,8 +351,10 @@
           pod              (get-in req [:request :object :metadata :generateName])
           namespace        (get-in req [:request :object :metadata :namespace])
           all-labels       (get-in req [:request :object :metadata :labels])
-          requested-labels (keys (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign)
-                                         all-labels))]
+          requested-labels (->> all-labels
+                               (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
+                               (keys)
+                               (set))]
       (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                namespace pod (str/join "," (map name requested-labels))))
       (if-let [assigned-device (assign-device ctx {:pod              pod
