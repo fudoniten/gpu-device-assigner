@@ -205,7 +205,7 @@
   "Apply a patch to a Kubernetes node."
   [{:keys [k8s-client]} node patch]
   (try
-    (k8s/patch-node k8s-client node (try-json-generate patch))
+    (k8s/patch-node k8s-client node patch)
     (catch Exception e
       (throw (ex-info "Failed to patch node"
                       {:node      node
@@ -216,10 +216,10 @@
   [{:keys [logger] :as ctx} node device-id pod namespace]
   (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node)
         updated-reservations (assoc reservations (name device-id) {:pod pod :namespace namespace :timestamp (.toString (Instant/now))})
-        reservation-patch {:metadata {:annotations
-                                      {:fudo.org/gpu.device.reservations
-                                       (json/generate-string updated-reservations)}}
-                           :resourceVersion version}]
+        reservation-patch [{:metadata {:annotations
+                                       {:fudo.org/gpu.device.reservations
+                                        (json/generate-string updated-reservations)}}
+                            :resourceVersion version}]]
     (try (node-patch ctx node reservation-patch)
          {:device-id device-id :pod pod :namespace namespace :node node}
          (catch Exception e

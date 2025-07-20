@@ -20,8 +20,7 @@
     (try
       (k8s/invoke client req)
       (catch Exception e
-        (println (format "Error during Kubernetes API invocation: %s" (.getMessage e)))
-        (throw (ex-info "error  during kubernetes api invocation: %s"
+        (throw (ex-info (format "error  during kubernetes api invocation: %s" (.getMessage e))
                         {:stack-trace (with-out-str (print-stack-trace e))
                          :status      (:status e)
                          :error       e}))))))
