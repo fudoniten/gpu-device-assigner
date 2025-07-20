@@ -16,6 +16,9 @@
   (:import java.util.Base64
            java.time.Instant))
 
+(defn pprint-string [o]
+  (with-out-str (pprint o)))
+
 (defn get-node-annotations
   "Retrieve annotations from a Kubernetes node."
   [{:keys [k8s-client]} node-name]
@@ -164,12 +167,16 @@
   (let [reservations (get-all-device-reservations ctx)]
     (get reservations device-id)))
 
-(defn pick-device [ctx labels]
+(defn pick-device [{:keys [logger] :as ctx} labels]
   (try
     (let [device-labels (get-all-device-labels ctx)
           matching      (find-matching-devices device-labels labels)
           reservations  (-> (get-all-device-reservations ctx) (keys) (set))
           available     (filter (fn [[dev-id _]] (some reservations dev-id)) matching)]
+      (log/debug logger (str "\n##########\n#  DEVICES\n##########\n\n"
+                             (pprint-string device-labels)))
+      (log/debug logger (str "\n##########\n#  RESERVATIONS\n##########\n\n"
+                             (pprint-string reservations)))
       (if-let [selected-id (rand-nth (keys available))]
         {:device-id selected-id :node (-> available selected-id :node-name)}
         nil))
@@ -289,9 +296,6 @@
                   :patchType "JSONPatch"
                   :patch     patch})})
 
-(defn pprint-string [o]
-  (with-out-str (pprint o)))
-
 (defn device-assignment-patch
   "Generate a JSON patch for assigning a device to a pod."
   [{:keys [logger]} device-id node]
@@ -334,11 +338,12 @@
     (let [fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
           label-enabled?   (fn [[_ v]] v)
           gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
+          remove-assign    (fn [[k _]] (not= k :fudo.org/gpu.assign))
           uid              (get-in req [:request :uid])
           pod              (get-in req [:request :object :metadata :generateName])
           namespace        (get-in req [:request :object :metadata :namespace])
           all-labels       (get-in req [:request :object :metadata :labels])
-          requested-labels (keys (filter (every-pred fudo-label? label-enabled? gpu-label?)
+          requested-labels (keys (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign)
                                          all-labels))]
       (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                namespace pod (str/join "," (map name requested-labels))))
