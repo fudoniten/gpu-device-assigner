@@ -4,6 +4,7 @@
             [clojure.set :refer [subset?]]
             [clojure.pprint :refer [pprint]]
             [clojure.spec.alpha :as s]
+            [clojure.spec.test.alpha :as stest]
 
             [gpu-device-assigner.context :as context]
             [gpu-device-assigner.logging :as log]
@@ -19,10 +20,15 @@
 (defn pprint-string [o]
   (with-out-str (pprint o)))
 
+(defn pthru-label [lbl o]
+  (println (str "###### " lbl))
+  (pprint o)
+  o)
+
 (defn get-node-annotations
   "Retrieve annotations from a Kubernetes node."
-  [{:keys [k8s-client]} node-name]
-  (-> (k8s/get-node k8s-client node-name)
+  [{:keys [k8s-client]} node]
+  (-> (k8s/get-node k8s-client node)
       :metadata
       :annotations))
 
@@ -56,31 +62,23 @@
   [str]
   (json/parse-string str true))
 
-(defn get-device-labels
-  "Get GPU device labels from node annotations."
-  [ctx node-name]
-  (some->> (get-node-annotations ctx node-name)
-           :fudo.org/gpu.device.labels
-           (base64-decode)
-           (String.)
-           (parse-json)
-           (map-vals set)))
-
 (defn get-device-reservations
   "Retrieve current device reservations from node annotations."
-  [ctx node-name]
+  [ctx node]
   (try
-    (let [annotations (get-node-annotations ctx node-name)]
+    (let [annotations (get-node-annotations ctx node)]
       (some->> annotations
                :fudo.org/gpu.device.reservations
+               (base64-decode)
+               (String.)
                (parse-json)
                (assoc (select-keys annotations [:resourceVersion]) :reservations)))
     (catch Exception e
       (throw (ex-info "Failed to retrieve device reservations"
-                      {:node-name node-name
+                      {:node      node
                        :exception e})))))
 
-(defn fudo-ns? [o] (= (namespace o)) "fudo.org")
+(defn fudo-ns? [o] (= (namespace o) "fudo.org"))
 
 (s/def ::device-labels
   (s/and set?
@@ -89,18 +87,18 @@
 
 (s/def ::device-node-map
   (s/map-of ::device-id
-            (s/keys :req-un [::node-name ::device-labels])))
+            (s/keys :req-un [::node ::device-labels])))
 
 (s/fdef -unpack-device-labels
   :args (s/cat :annotations (s/map-of symbol? any?))
   :ret  ::device-labels)
 (defn -unpack-device-labels
   [annotations]
-  (some-> annotations
-          :fudo.org/gpu.device.labels
-          (base64-decode)
-          (String.)
-          (parse-json)))
+  (some->> annotations
+           :fudo.org/gpu.device.labels
+           (base64-decode)
+           (String.)
+           (parse-json)))
 
 (s/def ::pod string?)
 (s/def ::namespace string?)
@@ -120,6 +118,8 @@
           (String.)
           (parse-json)))
 
+(stest/instrument '-unpack-device-reservations)
+
 (s/fdef get-all-device-labels
   :args ::context/context
   :ret  ::device-node-map)
@@ -129,14 +129,12 @@
          (map (fn [[node annos]]
                 (into {}
                       (map (fn [[device labels]]
-                             [device {:node-name node
+                             [device {:node   node
                                       :labels (set (map keyword labels))}]))
                       (-unpack-device-labels annos)))
               (get-all-node-annotations ctx))))
 
-(defn pthru-label [lbl o]
-  (println (str "###### " lbl))
-  (pprint o))
+(stest/instrument 'get-all-device-labels)
 
 (s/fdef find-matching-devices
   :args (s/cat :device-labels ::device-node-map
@@ -148,7 +146,7 @@
                (into {}
                      (filter
                       (fn [[_ {device-labels :labels}]]
-                        (subset? req-labels device-labels)))
+                        (subset? (pthru-label "REQ" req-labels) (pthru-label "AVAIL" device-labels))))
                      device-labels)))
 
 (s/fdef get-all-device-reservations
@@ -161,11 +159,6 @@
               [device-id {:keys [pod namespace] :as reservation}] (-unpack-device-reservations node-annos)
               :when (k8s/pod-exists? k8s-client pod namespace)]
           [device-id reservation])))
-
-(defn device-reserved?
-  [ctx device-id]
-  (let [reservations (get-all-device-reservations ctx)]
-    (get reservations device-id)))
 
 (s/fdef pick-device
   :args (s/cat :ctx    ::context/context
@@ -182,24 +175,26 @@
       (log/debug logger (str "\n##########\n#  RESERVATIONS\n##########\n\n"
                              (pprint-string reservations)))
       (let [matching      (find-matching-devices device-labels labels)
-            available     (filter (fn [[dev-id _]] (not (reservations dev-id))) matching)]
+            available     (into {} (filter (fn [[dev-id _]] (not (reservations dev-id)))) matching)]
         (if (empty? (keys available))
           nil
           (let [selected-id (rand-nth (keys available))]
-            {:device-id selected-id :node (-> available selected-id :node-name)}))))
+            {:device-id selected-id :node (-> (pthru-label "AVAILABLE" available) selected-id :node)}))))
     (catch Exception e
       (throw (ex-info "Failed to pick device"
                       {:labels labels
                        :exception e})))))
 
+(stest/instrument 'pick-device)
+
 (defn node-patch
   "Apply a patch to a Kubernetes node."
-  [{:keys [k8s-client]} node-name patch]
+  [{:keys [k8s-client]} node patch]
   (try
-    (k8s/patch-node k8s-client node-name patch)
+    (k8s/patch-node k8s-client node patch)
     (catch Exception e
       (throw (ex-info "Failed to patch node"
-                      {:node-name node-name
+                      {:node node
                        :patch patch
                        :exception e})))))
 
@@ -225,7 +220,7 @@
 (defn assign-device
   "Assign a GPU device to a pod based on requested labels."
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels]}]
-  (if-let [device (pick-device ctx requested-labels)]
+  (if-let [device (pthru-label "PICKED DEVICE" (pick-device ctx requested-labels))]
     (let [{:keys [device-id node]} device]
       (log/info logger
                 (format "attempting to reserve device %s on node %s to pod %s/%s"
