@@ -54,8 +54,9 @@
     (patch-node [_ node-name patch]
       (invoke client
               {:kind    :Node
-               :action  :patch/json
+               :action  :patch/strategic
                :request {:name node-name
+                         :body patch
                          :body patch}}))
 
     (get-pod [_ pod-name namespace]
