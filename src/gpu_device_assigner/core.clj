@@ -136,7 +136,7 @@
 
 (defn pthru-label [lbl o]
   (println (str "###### " lbl))
-  (pprint-string o))
+  (pprint o))
 
 (s/fdef find-matching-devices
   :args (s/cat :device-labels ::device-node-map
@@ -144,6 +144,7 @@
   :ret  ::device-labels)
 (defn find-matching-devices
   [device-labels req-labels]
+  (println (str "SEARCHING FOR LABELS: " (str/join "," (map name req-labels))))
   (into {}
         (filter
          (fn [[_ {labels :labels}]]
@@ -174,17 +175,19 @@
 (defn pick-device [{:keys [logger] :as ctx} labels]
   (try
     (let [device-labels (get-all-device-labels ctx)
-          matching      (find-matching-devices device-labels labels)
-          reservations  (-> (get-all-device-reservations ctx) (keys) (set))
-          available     (filter (fn [[dev-id _]] (not (some reservations dev-id))) matching)]
+          reservations  (-> (get-all-device-reservations ctx) (keys) (set))]
+      (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
+                             (pprint-string labels)))
       (log/debug logger (str "\n##########\n#  DEVICES\n##########\n\n"
                              (pprint-string device-labels)))
       (log/debug logger (str "\n##########\n#  RESERVATIONS\n##########\n\n"
                              (pprint-string reservations)))
-      (if (empty? (keys available))
-        nil
-        (let [selected-id (rand-nth (keys available))]
-          {:device-id selected-id :node (-> available selected-id :node-name)})))
+      (let [matching      (find-matching-devices device-labels labels)
+            available     (filter (fn [[dev-id _]] (not (some reservations dev-id))) matching)]
+        (if (empty? (keys available))
+          nil
+          (let [selected-id (rand-nth (keys available))]
+            {:device-id selected-id :node (-> available selected-id :node-name)}))))
     (catch Exception e
       (throw (ex-info "Failed to pick device"
                       {:labels labels
