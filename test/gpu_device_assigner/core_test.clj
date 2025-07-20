@@ -46,15 +46,39 @@
       (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client :gpu-reservations {})}
             handle-mutation-fn (core/handle-mutation ctx)
             request {:kind "AdmissionReview"
-                     :request {:uid "123abc..."
-                               :object {:metadata {:name "mypod"
+                     :request {:uid "123abc"
+                               :object {:metadata {:name "test-pod"
                                                    :namespace "default"
-                                                   :annotations {"gpu.openai.com/needs" "true"}}
-                                        :spec {:nodeName "gpu-node-1"}}}}
+                                                   :annotations {"label1" "true"}}
+                                        :spec {:nodeName "node1"}}}}
             response (handle-mutation-fn request)]
         (is (= "AdmissionReview" (:kind response)))
-        (is (= "123abc..." (get-in response [:response :uid])))
-        (is (= true (get-in response [:response :allowed])))))))
+        (is (= "123abc" (get-in response [:response :uid])))
+        (is (= true (get-in response [:response :allowed])))))
+
+    (testing "Handle request with unexpected kind"
+      (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client)}
+            handle-mutation-fn (core/handle-mutation ctx)
+            request {:kind "UnexpectedKind"
+                     :request {:uid "123abc"}}
+            response (handle-mutation-fn request)]
+        (is (= "AdmissionReview" (:kind response)))
+        (is (= "123abc" (get-in response [:response :uid])))
+        (is (= false (get-in response [:response :allowed])))))
+
+    (testing "Handle request where no device can be assigned"
+      (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client)}
+            handle-mutation-fn (core/handle-mutation ctx)
+            request {:kind "AdmissionReview"
+                     :request {:uid "123abc"
+                               :object {:metadata {:name "test-pod"
+                                                   :namespace "default"
+                                                   :annotations {"nonexistent-label" "true"}}
+                                        :spec {:nodeName "node1"}}}}
+            response (handle-mutation-fn request)]
+        (is (= "AdmissionReview" (:kind response)))
+        (is (= "123abc" (get-in response [:response :uid])))
+        (is (= false (get-in response [:response :allowed])))))))
 
 (deftest test-handle-mutation
   (let [mock-logger (reify log/Logger
