@@ -328,12 +328,12 @@
        :kind       "AdmissionReview"
        :response   {:uid     (get-in req [:request :uid])
                     :allowed false
-                    :status {:code    400
-                             :message (format "Unexpected request kind: %s" kind)}}})
-    (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pr-str req)))
+                    :status  {:code    400
+                              :message (format "Unexpected request kind: %s" kind)}}})
+    (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pprint-string req)))
     (let [fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
           label-enabled?   (fn [[_ v]] v)
-          gpu-label?       (fn [[k _]] (= "gpu" (first (str/split k (name #"\.")))))
+          gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
           uid              (get-in req [:request :uid])
           pod              (get-in req [:request :object :metadata :generateName])
           namespace        (get-in req [:request :object :metadata :namespace])
