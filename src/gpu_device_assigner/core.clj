@@ -308,8 +308,8 @@
                 :path  "/metadata/annotations"
                 :value {}}
                {:op    "add"
-                :path  "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu"
-                :value (name device-id)}
+                :path  "/metadata/annotations/cdi.k8s.io~1deviceName"
+                :value (format "nvidia.com/%s" (name device-id))}
                {:op    "add"
                 :path  "/spec/nodeName"
                 :value (name node)}]]
