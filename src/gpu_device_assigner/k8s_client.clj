@@ -2,6 +2,7 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as stest]
             [clojure.string :as str]
+            [clojure.stacktrace :refer [print-stack-trace]]
 
             [gpu-device-assigner.logging :as log]
 
@@ -20,7 +21,10 @@
       (k8s/invoke client req)
       (catch Exception e
         (println (format "Error during Kubernetes API invocation: %s" (.getMessage e)))
-        (throw e)))))
+        (throw (ex-info "error  during kubernetes api invocation: %s"
+                        {:stack-trace (with-out-str (print-stack-trace e))
+                         :status      (:status e)
+                         :error       e}))))))
 
 (defprotocol IK8SClient
   "Protocol defining Kubernetes client operations."
@@ -52,8 +56,8 @@
       (invoke client
               {:kind    :Node
                :action  :patch/json
-               :request {:name      node-name
-                         :body      patch}}))
+               :request {:name node-name
+                         :body patch}}))
 
     (get-pod [_ pod-name namespace]
       (invoke client

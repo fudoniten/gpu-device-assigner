@@ -25,6 +25,20 @@
   (pprint o)
   o)
 
+(defn try-json-parse [str]
+  (try
+    (json/parse-string str true)
+    (catch Exception e
+      (throw (ex-info "exception encountered when parsing json string"
+                      {:body str :exception e})))))
+
+(defn try-json-generate [json]
+  (try
+    (json/generate-string json)
+    (catch Exception e
+      (throw (ex-info "exception encountered when generating json string"
+                      {:body str :exception e})))))
+
 (defn get-node-annotations
   "Retrieve annotations from a Kubernetes node."
   [{:keys [k8s-client]} node]
@@ -191,11 +205,11 @@
   "Apply a patch to a Kubernetes node."
   [{:keys [k8s-client]} node patch]
   (try
-    (k8s/patch-node k8s-client node patch)
+    (k8s/patch-node k8s-client node (try-json-generate patch))
     (catch Exception e
       (throw (ex-info "Failed to patch node"
-                      {:node node
-                       :patch patch
+                      {:node      node
+                       :patch     patch
                        :exception e})))))
 
 (defn reserve-device
@@ -209,12 +223,14 @@
     (try (node-patch ctx node reservation-patch)
          {:device-id device-id :pod pod :namespace namespace :node node}
          (catch Exception e
+           (log/debug logger (with-out-str (pprint e)))
            (let [status (ex-data e)]
              (if (= 409 (:status status))
                (log/error logger (format "conflict: reservation was modified before patch was applied. unable to reserve device %s for pod %s."
                                          device-id pod))
-               (log/error logger (format "error %s: unable to reserve device %s for pod %s: %s"
-                                         (:status status) device-id pod (:message e))))
+               (do (log/error logger (format "error %s: unable to reserve device %s for pod %s: %s"
+                                             (:status status) device-id pod (:message e)))
+                   (log/debug logger (with-out-str (print-stack-trace e)))))
              nil)))))
 
 (defn assign-device
@@ -230,20 +246,6 @@
                    (format "unable to find device to reserve for pod %s/%s, labels [%s]"
                            namespace pod (str/join "," (map name requested-labels))))
         nil)))
-
-(defn try-json-parse [str]
-  (try
-    (json/parse-string str true)
-    (catch Exception e
-      (throw (ex-info "exception encountered when parsing json string"
-                      {:body str :exception e})))))
-
-(defn try-json-generate [json]
-  (try
-    (json/generate-string json)
-    (catch Exception e
-      (throw (ex-info "exception encountered when generating json string"
-                      {:body str :exception e})))))
 
 (defn json-middleware
   "Middleware to encode/decode the JSON body of requests/responses."
