@@ -145,12 +145,14 @@
 (defn find-matching-devices
   [device-labels req-labels]
   (println (str "SEARCHING FOR LABELS: " (str/join "," (map name req-labels))))
-  (into {}
-        (filter
-         (fn [[_ {labels :labels}]]
-           (subset? (pthru-label "REQUESTED" req-labels)
-                    (pthru-label "AVAILABLE" labels))))
-        device-labels))
+  (pthru-label "MATCHING DEVICES"
+               (into {}
+                     (filter
+                      (fn [[_ {labels :labels}]]
+                        (pthru-label "MATCHING"
+                                     (subset? (pthru-label "REQUESTED" req-labels)
+                                              (pthru-label "AVAILABLE" labels)))))
+                     device-labels)))
 
 (s/fdef get-all-device-reservations
   :args (s/cat :ctx ::context/context)
@@ -183,7 +185,7 @@
       (log/debug logger (str "\n##########\n#  RESERVATIONS\n##########\n\n"
                              (pprint-string reservations)))
       (let [matching      (find-matching-devices device-labels labels)
-            available     (filter (fn [[dev-id _]] (not (some reservations dev-id))) matching)]
+            available     (filter (fn [[dev-id _]] (not (reservations dev-id))) matching)]
         (if (empty? (keys available))
           nil
           (let [selected-id (rand-nth (keys available))]
