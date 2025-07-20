@@ -41,7 +41,8 @@
                                  [:Pod :get] (if (= "other-pod" (:name request))
                                                {:name (:name request) :namespace (:namespace request)}
                                                (throw (ex-info "Not found" {:type :not-found})))
-                                 [:Node :patch/json] true)))))]
+                                 [:Node :patch/json] true)
+                                 [:Node :list] {:items []})))))]
     (testing "Handle valid mutation request"
       (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client :gpu-reservations {})}
             handle-mutation-fn (core/handle-mutation ctx)
