@@ -96,8 +96,6 @@
 (s/def ::namespace string?)
 (s/def ::timestamp string?)
 
-(defn pthru [o] (clojure.pprint/pprint o) o)
-
 (s/def ::device-reservations
   (s/map-of ::device-id (s/keys :req-un [::pod ::namespace ::timestamp])))
 
@@ -213,18 +211,16 @@
 (defn assign-device
   "Assign a GPU device to a pod based on requested labels."
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels]}]
-  (if-let [{:keys [device-id node]} (pick-device ctx requested-labels)]
-    (do (log/info logger
-                  (format "attempting to reserve device %s on node %s to pod %s/%s"
-                          device-id node namespace pod))
-        (reserve-device ctx node device-id pod namespace))
+  (if-let [device (pick-device ctx requested-labels)]
+    (let [{:keys [device-id node]} device]
+      (log/info logger
+                (format "attempting to reserve device %s on node %s to pod %s/%s"
+                        device-id node namespace pod))
+      (reserve-device ctx node device-id pod namespace))
     (do (log/error logger
                    (format "unable to find device to reserve for pod %s/%s, labels [%s]"
                            namespace pod (str/join "," (map name requested-labels))))
-        (ex-info (format "unable to find device to reserve for pod %s/%s" namespace pod)
-                 {:pod       pod
-                  :namespace namespace
-                  :labels    requested-labels}))))
+        nil)))
 
 (defn try-json-parse [str]
   (try
@@ -298,7 +294,7 @@
 
 (defn device-assignment-patch
   "Generate a JSON patch for assigning a device to a pod."
-  [logger device-id node]
+  [{:keys [logger]} device-id node]
   (let [patch [{:op    "add"
                 :path  "/metadata/annotations"
                 :value {}}
@@ -337,28 +333,25 @@
     (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pr-str req)))
     (let [fudo-label?      (filter (fn [[k _]] (= "fudo.org" (namespace k))))
           label-enabled?   (filter (fn [[_ v]] v))
+          gpu-label?       (filter (fn [[k _]] (= "gpu" (first (str/split k (name #"\."))))))
           uid              (get-in req [:request :uid])
           pod              (get-in req [:request :object :metadata :generateName])
           namespace        (get-in req [:request :object :metadata :namespace])
           all-labels       (get-in req [:request :object :metadata :labels])
-          requested-labels (keys (filter (fn [label]
-                                           (and (fudo-label? label)
-                                                (label-enabled? label)))
+          requested-labels (keys (filter (every-pred fudo-label? label-enabled? gpu-label?)
                                          all-labels))]
       (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                namespace pod (str/join "," (map name requested-labels))))
-      (if-let [{:keys [device-id pod node]} (assign-device ctx
-                                                           {:pod       pod
-                                                            :namespace namespace
-                                                            :requested-labels requested-labels})]
-        (do
+      (if-let [assigned-device (assign-device ctx {:pod       pod
+                                                   :namespace namespace
+                                                   :requested-labels requested-labels})]
+        (let [{:keys [device-id pod node]} assigned-device]
           (log/info (:logger ctx) (format "Assigned device %s to pod %s/%s on node %s" device-id namespace pod node))
           (admission-review-response :uid uid :allowed? true
-                                     :patch (device-assignment-patch device-id node)))
-        (do
-          (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s/%s" namespace pod))
-          (admission-review-response :uid uid :status 500 :allowed? false
-                                     :message (format "failed to find unreserved device for pod %s/%s." namespace pod)))))))
+                                     :patch (device-assignment-patch ctx device-id node)))
+        (do (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s/%s" namespace pod))
+            (admission-review-response :uid uid :status 500 :allowed? false
+                                       :message (format "failed to find unreserved device for pod %s/%s." namespace pod)))))))
 
 (defn app [ctx]
   (ring/ring-handler

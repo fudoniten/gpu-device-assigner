@@ -16,11 +16,8 @@
 (defrecord K8SBaseClient [client]
   IK8SBaseClient
   (invoke [_ req]
-    (println (format "Invoking Kubernetes API with request: %s" req))
     (try
-      (let [response (k8s/invoke client req)]
-        (println (format "Received response: %s" response))
-        response)
+      (k8s/invoke client req)
       (catch Exception e
         (println (format "Error during Kubernetes API invocation: %s" (.getMessage e)))
         (throw e)))))
