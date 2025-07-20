@@ -293,23 +293,26 @@
                   :patchType "JSONPatch"
                   :patch     patch})})
 
-(defn device-assignment-patch
-  "Generate a JSON patch for assigning a device to a pod."
-  [device-id node]
-  (-> [{:op    "add"
-        :path  "/metadata/annotations"
-        :value {}}
-       {:op    "add"
-        :path  "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu"
-        :value (name device-id)}
-       {:op    "add"
-        :path  "/spec/nodeName"
-        :value (name node)}]
-      (json/generate-string)
-      (base64-encode)))
-
 (defn pprint-string [o]
   (with-out-str (pprint o)))
+
+(defn device-assignment-patch
+  "Generate a JSON patch for assigning a device to a pod."
+  [logger device-id node]
+  (let [patch [{:op    "add"
+                :path  "/metadata/annotations"
+                :value {}}
+               {:op    "add"
+                :path  "/metadata/annotations/cdi.k8s.io~1nvidia.com~1gpu"
+                :value (name device-id)}
+               {:op    "add"
+                :path  "/spec/nodeName"
+                :value (name node)}]]
+    (log/debug logger (str "\n##########\n#  PATCH\n##########\n\n"
+                           (pprint-string patch)))
+    (-> patch
+        (json/generate-string)
+        (base64-encode))))
 
 (defn log-requests-middleware
   [{:keys [logger]}]
