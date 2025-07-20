@@ -47,7 +47,7 @@
             handle-mutation-fn (core/handle-mutation ctx)
             request {:kind "AdmissionReview"
                      :request {:uid "123abc"
-                               :object {:metadata {:name "test-pod"
+                               :object {:metadata {:generateName "test-pod"
                                                    :namespace "default"
                                                    :annotations {"label1" "true"}}
                                         :spec {:nodeName "node1"}}}}
@@ -71,7 +71,7 @@
             handle-mutation-fn (core/handle-mutation ctx)
             request {:kind "AdmissionReview"
                      :request {:uid "123abc"
-                               :object {:metadata {:name "test-pod"
+                               :object {:metadata {:generateName "test-pod"
                                                    :namespace "default"
                                                    :annotations {"nonexistent-label" "true"}}
                                         :spec {:nodeName "node1"}}}}
@@ -107,7 +107,7 @@
             handle-mutation-fn (core/handle-mutation ctx)
             request {:kind "AdmissionReview"
                      :request {:uid "123abc"
-                               :object {:metadata {:name "test-pod"
+                               :object {:metadata {:generateName "test-pod"
                                                    :namespace "default"
                                                    :annotations {"label1" "true"}}
                                         :spec {:nodeName "node1"}}}}
