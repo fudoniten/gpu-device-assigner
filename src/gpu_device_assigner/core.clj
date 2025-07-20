@@ -139,6 +139,10 @@
            (some #(= device %) reserved-devices)))
         devices))
 
+(defn pthru-label [lbl o]
+  (println (str "###### " lbl))
+  (pprint-string o))
+
 (s/fdef find-matching-devices
   :args (s/cat :device-labels ::device-labels
                :req-labels (s/and set? (s/coll-of ::device-label)))
@@ -147,8 +151,9 @@
   [device-labels req-labels]
   (into {}
         (filter
-         (fn [[_ {labels ::device-labels}]]
-           (subset? req-labels labels)))
+         (fn [[_ {labels :labels}]]
+           (subset? (pthru-label "REQUESTED" req-labels)
+                    (pthru-label "AVAILABLE" labels))))
         device-labels))
 
 (s/fdef get-all-device-reservations
