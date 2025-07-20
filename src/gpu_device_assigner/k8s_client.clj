@@ -56,7 +56,6 @@
               {:kind    :Node
                :action  :patch/strategic
                :request {:name node-name
-                         :body patch
                          :body patch}}))
 
     (get-pod [_ pod-name namespace]
