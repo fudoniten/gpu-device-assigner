@@ -80,7 +80,14 @@
                       {:node-name node-name
                        :exception e})))))
 
+(defn fudo-ns? [o] (= (namespace o)) "fudo.org")
+
 (s/def ::device-labels
+  (s/and set?
+         (s/coll-of keyword?)
+         (s/every fudo-ns?)))
+
+(s/def ::device-node-map
   (s/map-of ::device-id
             (s/keys :req-un [::node-name ::device-labels])))
 
@@ -115,7 +122,7 @@
 
 (s/fdef get-all-device-labels
   :args ::context/context
-  :ret  ::device-labels)
+  :ret  ::device-node-map)
 (defn get-all-device-labels
   [ctx]
   (apply merge
@@ -127,25 +134,13 @@
                       (-unpack-device-labels annos)))
               (get-all-node-annotations ctx))))
 
-(s/fdef find-available-devices
-  :args (s/cat :devices          ::device-labels
-               :reserved-devices (s/coll-of ::device-id))
-  :ret  ::device-labels)
-(defn find-available-devices
-  [devices reserved-devices]
-  (into {}
-        (filter
-         (fn [[device _]]
-           (some #(= device %) reserved-devices)))
-        devices))
-
 (defn pthru-label [lbl o]
   (println (str "###### " lbl))
   (pprint-string o))
 
 (s/fdef find-matching-devices
-  :args (s/cat :device-labels ::device-labels
-               :req-labels (s/and set? (s/coll-of ::device-label)))
+  :args (s/cat :device-labels ::device-node-map
+               :req-labels    ::device-labels)
   :ret  ::device-labels)
 (defn find-matching-devices
   [device-labels req-labels]
@@ -172,19 +167,24 @@
   (let [reservations (get-all-device-reservations ctx)]
     (get reservations device-id)))
 
+(s/fdef pick-device
+  :args (s/cat :ctx    ::context/context
+               :labels ::device-labels)
+  :ret  (s/keys :req-un [::device-id ::node]))
 (defn pick-device [{:keys [logger] :as ctx} labels]
   (try
     (let [device-labels (get-all-device-labels ctx)
           matching      (find-matching-devices device-labels labels)
           reservations  (-> (get-all-device-reservations ctx) (keys) (set))
-          available     (filter (fn [[dev-id _]] (some reservations dev-id)) matching)]
+          available     (filter (fn [[dev-id _]] (not (some reservations dev-id))) matching)]
       (log/debug logger (str "\n##########\n#  DEVICES\n##########\n\n"
                              (pprint-string device-labels)))
       (log/debug logger (str "\n##########\n#  RESERVATIONS\n##########\n\n"
                              (pprint-string reservations)))
-      (if-let [selected-id (rand-nth (keys available))]
-        {:device-id selected-id :node (-> available selected-id :node-name)}
-        nil))
+      (if (empty? (keys available))
+        nil
+        (let [selected-id (rand-nth (keys available))]
+          {:device-id selected-id :node (-> available selected-id :node-name)})))
     (catch Exception e
       (throw (ex-info "Failed to pick device"
                       {:labels labels
@@ -345,16 +345,15 @@
           gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
           remove-assign    (fn [[k _]] (not= k :fudo.org/gpu.assign))
           uid              (get-in req [:request :uid])
-          pod              (or (get-in req [:request :object :metadata :name])
-                               (get-in req [:request :object :metadata :generateName]))
+          pod              (get-in req [:request :object :metadata :generateName])
           namespace        (get-in req [:request :object :metadata :namespace])
           all-labels       (get-in req [:request :object :metadata :labels])
           requested-labels (keys (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign)
                                          all-labels))]
       (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                namespace pod (str/join "," (map name requested-labels))))
-      (if-let [assigned-device (assign-device ctx {:pod       pod
-                                                   :namespace namespace
+      (if-let [assigned-device (assign-device ctx {:pod              pod
+                                                   :namespace        namespace
                                                    :requested-labels requested-labels})]
         (let [{:keys [device-id pod node]} assigned-device]
           (log/info (:logger ctx) (format "Assigned device %s to pod %s/%s on node %s" device-id namespace pod node))
