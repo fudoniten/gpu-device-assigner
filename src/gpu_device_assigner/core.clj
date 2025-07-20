@@ -144,14 +144,11 @@
   :ret  ::device-labels)
 (defn find-matching-devices
   [device-labels req-labels]
-  (println (str "SEARCHING FOR LABELS: " (str/join "," (map name req-labels))))
   (pthru-label "MATCHING DEVICES"
                (into {}
                      (filter
-                      (fn [[_ {labels :labels}]]
-                        (pthru-label "MATCHING"
-                                     (subset? (pthru-label "REQUESTED" req-labels)
-                                              (pthru-label "AVAILABLE" labels)))))
+                      (fn [[_ {device-labels :labels}]]
+                        (subset? req-labels device-labels)))
                      device-labels)))
 
 (s/fdef get-all-device-reservations

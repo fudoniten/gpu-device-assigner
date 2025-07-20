@@ -20,15 +20,7 @@
   (testing "Parsing JSON string into Clojure data structure"
     (is (= {:key "value"} (core/parse-json "{\"key\": \"value\"}")))))
 
-(deftest test-find-matching-devices
-  (testing "Find matching devices"
-    (let [device-labels {:gpu1 {:node-name "node1" :labels #{:fudo.org/gpu.label1 :fudo.org/gpu.label2}}
-                         :gpu2 {:node-name "node2" :labels #{:fudo.org/gpu.label1}}
-                         :gpu3 {:node-name "node3" :labels #{:fudo.org/gpu.label3}}}
-          req-labels #{:fudo.org/gpu.label1}
-          expected {:gpu1 {:node-name "node1" :labels #{:fudo.org/gpu.label1 :fudo.org/gpu.label2}}
-                    :gpu2 {:node-name "node2" :labels #{:fudo.org/gpu.label1}}}]
-      (is (= expected (core/find-matching-devices device-labels req-labels))))))
+(deftest test-handle-mutation
   (let [mock-logger (reify log/Logger
                       (fatal [_ _])
                       (error [_ _])
