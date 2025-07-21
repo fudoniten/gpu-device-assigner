@@ -175,8 +175,8 @@
   [{:keys [k8s-client] :as ctx}]
   (into {}
         (for [[_ node-annos] (get-all-node-annotations ctx)
-              [device-id {:keys [pod namespace] :as reservation}] (-unpack-device-reservations node-annos)
-              :when (k8s/pod-exists? k8s-client pod namespace)]
+              [device-id {:keys [uid namespace] :as reservation}] (-unpack-device-reservations node-annos)
+              :when (k8s/pod-uid-exists? k8s-client uid namespace)]
           [device-id reservation])))
 
 (s/fdef pick-device
@@ -218,9 +218,13 @@
                        :exception e})))))
 
 (defn reserve-device
-  [{:keys [logger] :as ctx} node device-id pod namespace]
+  [{:keys [logger] :as ctx} {:keys [node device-id pod namespace uid]}]
   (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node)
-        updated-reservations (assoc reservations (name device-id) {:pod pod :namespace namespace :timestamp (.toString (Instant/now))})
+        updated-reservations (assoc reservations (name device-id)
+                                    {:pod pod
+                                     :namespace namespace
+                                     :timestamp (.toString (Instant/now))
+                                     :uid uid})
         reservation-patch {:kind "Node"
                            :metadata {:annotations
                                       {:fudo.org/gpu.device.reservations
@@ -241,13 +245,13 @@
 
 (defn assign-device
   "Assign a GPU device to a pod based on requested labels."
-  [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels]}]
+  [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
   (if-let [device (pthru-label "PICKED DEVICE" (pick-device ctx requested-labels))]
     (let [{:keys [device-id node]} device]
       (log/info logger
                 (format "attempting to reserve device %s on node %s to pod %s/%s"
                         device-id node namespace pod))
-      (reserve-device ctx node device-id pod namespace))
+      (reserve-device ctx {:node node :device-id device-id :pod pod :namespace namespace :uid uid}))
     (do (log/error logger
                    (format "unable to find device to reserve for pod %s/%s, labels [%s]"
                            namespace pod (str/join "," (map name requested-labels))))
@@ -360,6 +364,7 @@
       (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                namespace pod (str/join "," (map name requested-labels))))
       (if-let [assigned-device (assign-device ctx {:pod              pod
+                                                   :uid              uid
                                                    :namespace        namespace
                                                    :requested-labels requested-labels})]
         (let [{:keys [device-id pod node]} assigned-device]

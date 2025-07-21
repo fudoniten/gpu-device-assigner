@@ -27,13 +27,15 @@
 
 (defprotocol IK8SClient
   "Protocol defining Kubernetes client operations."
-  (get-node    [self node-name])
-  (get-nodes   [self])
-  (patch-node  [self node-name patch])
+  (get-node           [self node-name])
+  (get-nodes          [self])
+  (patch-node         [self node-name patch])
 
-  (get-pod     [self pod-name namespace])
-  (get-pods    [self])
-  (pod-exists? [self pod-name namespace]))
+  (get-pod            [self pod-name namespace])
+  (get-pods           [self])
+  (pod-exists?        [self pod-name namespace])
+  (pod-uid-exists?    [self uid namespace])
+  (get-namespace-pods [self namespace]))
 
 (defrecord K8SClient
     [client]
@@ -71,12 +73,24 @@
                :action  :list
                :request {:raw-path "/api/v1/pods"}}))
 
+    (get-namespace-pods [_ namespace]
+      (invoke client
+              {:kind    :Pod
+               :action  :list
+               :request {:namespace namespace}}))
+
     (pod-exists? [self pod-name namespace]
       (try (boolean (get-pod self pod-name namespace))
            (catch ExceptionInfo e
              (if (= (:type (ex-data e)) :not-found)
                false
-               (throw e))))))
+               (throw e)))))
+
+    (pod-uid-exists? [self uid namespace]
+      (some (fn [pod]
+              (when (= (get-in pod [:metadata :uid]) uid)
+                (boolean pod)))
+            (get-namespace-pods self namespace))))
 
 (defn base64-string?
   "Check if a string is a valid Base64 encoded string."
