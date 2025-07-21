@@ -64,7 +64,12 @@
   "Decode a Base64 encoded string."
   [b64-str]
   (let [decoder (Base64/getDecoder)]
-    (.decode decoder b64-str)))
+    (try
+      (.decode decoder b64-str)
+      (catch Exception e
+        (println (format "failed to decode base64 string: %s: %s"
+                         b64-str (.getMessage e)))
+        (throw e)))))
 
 (defn map-vals
   "Apply a function to all values in a map."
