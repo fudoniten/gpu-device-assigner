@@ -224,7 +224,7 @@
         reservation-patch {:kind "Node"
                            :metadata {:annotations
                                       {:fudo.org/gpu.device.reservations
-                                       (json/generate-string updated-reservations)}}
+                                       (base64-encode (json/generate-string updated-reservations))}}
                            :resourceVersion version}]
     (try (node-patch ctx node reservation-patch)
          {:device-id device-id :pod pod :namespace namespace :node node}
