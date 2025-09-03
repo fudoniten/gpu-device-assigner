@@ -36,7 +36,7 @@
   (patch-lease        [self namespace name merge-path])
   (list-leases        [self namespace])
 
-  (get-pod-by-uid     [self uid])
+  (get-pod-by-uid     [self namespace uid])
   (get-pod            [self pod-name namespace])
   (get-pods           [self])
   (pod-exists?        [self pod-name namespace])
@@ -108,42 +108,41 @@
     (create-lease [_ namespace name lease-body]
       ;; POST to the collection; ensure metadata.name/namespace are set in body
       (let [body (-> lease-body
-                     (assoc-in [:metadata :name] name)
-                     (assoc-in [:metadata :namespace] namespace))]
+                     (assoc-in [:metadata :name] name))]
         (invoke client
                 {:kind    :Lease
                  :action  :create
-                 :request {:raw-path (lease-collection-path namespace)
-                           :body     body}})))
+                 :request {:namespace namespace
+                           :body      body}})))
 
     (get-lease [_ namespace name]
       (invoke client
               {:kind    :Lease
                :action  :get
-               :request {:raw-path (lease-item-path namespace name)}}))
+               :request {:name      name
+                         :namespace namespace}}))
 
     (patch-lease [_ namespace name merge-patch]
       ;; Use JSON Merge Patch for Leases (spec.renewTime / holderIdentity, etc.)
       (invoke client
               {:kind    :Lease
                :action  :patch/merge
-               :request {:raw-path (lease-item-path namespace name)
-                         :body     merge-patch}}))
+               :request {:name      name
+                         :namespace namespace
+                         :body      merge-patch}}))
 
     (list-leases [_ namespace]
-      (let [path (lease-collection-path namespace)]
-        (log/warn logger (format "*** PATH IS: %s" path))
-        (invoke client
-                {:kind    :Lease
-                 :action  :list
-                 :request {:raw-path path}})))
+      (invoke client
+              {:kind    :Lease
+               :action  :list
+               :request {:namespace namespace}}))
 
-    (get-pod-by-uid [_ uid]
+    (get-pod-by-uid [self namespace uid]
       ;; fieldSelector works cluster-wide when you hit /api/v1/pods at the root
-      (let [raw (format "/api/v1/pods?fieldSelector=metadata.uid=%s" uid)
-            res (invoke client {:kind :Pod :action :list :request {:raw-path raw}})
-            pod (first (:items res))]
-        pod)))
+      (some (fn [pod]
+              (when (= (get-in pod [:metadata :uid]) uid)
+                pod))
+            (get-namespace-pods self namespace))))
 
 (defn base64-string?
   "Check if a string is a valid Base64 encoded string."

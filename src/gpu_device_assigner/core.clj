@@ -9,6 +9,7 @@
             [gpu-device-assigner.context :as context]
             [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
+            [gpu-device-assigner.time :as time]
 
             [reitit.ring :as ring]
             [cheshire.core :as json]
@@ -69,8 +70,8 @@
                             (seq extra-labels) (merge extra-labels))}
     :spec {:holderIdentity       host-uid
            :leaseDurationSeconds default-lease-seconds
-           :acquireTime          (now-rfc3339)
-           :renewTime            (now-rfc3339)}}))
+           :acquireTime          (time/now-rfc3339-micro)
+           :renewTime            (time/now-rfc3339-micro)}}))
 
 (defn lease-expired?
   "Return true if now - renewTime > leaseDurationSeconds (or missing renewTime)."
@@ -89,10 +90,12 @@
    - POST Lease -> 201 => win
    - 409 => GET; if expired => PATCH renew+holderIdentity => win
    - else lose"
-  [{:keys [k8s-client logger] :as ctx} device-uuid host-uid]
-  (let [ns   (claims-namespace ctx)
+  [{:keys [k8s-client logger namespace] :as ctx} device-uuid host-uid]
+  (let [pod-ns namespace
+        ns   (claims-namespace ctx)
         nm   (lease-name device-uuid)
-        body (lease-body device-uuid host-uid)]
+        body (lease-body device-uuid host-uid
+                         {"fudo.org/pod.namespace" pod-ns})]
     (try
       (let [{:keys [status]} (k8s/create-lease k8s-client ns nm body)]
         (cond
@@ -243,7 +246,8 @@
   "Claim a GPU via Lease and return the JSONPatch-ready info."
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
   ;; Make UID available to pick-device -> try-claim-uuid!
-  (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE" (pick-device ctx uid requested-labels))]
+  (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE"
+                                                 (pick-device (assoc ctx :namespace namespace) uid requested-labels))]
     (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
                                  device-id namespace pod node))
         {:device-id device-id :pod pod :namespace namespace :node node})

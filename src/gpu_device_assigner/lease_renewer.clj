@@ -3,7 +3,8 @@
             [clojure.spec.alpha :as s]
 
             [gpu-device-assigner.k8s-client :as k8s]
-            [gpu-device-assigner.logging :as log])
+            [gpu-device-assigner.logging :as log]
+            [gpu-device-assigner.time :as time])
   (:import java.time.OffsetDateTime))
 
 (s/def ::claims-namespace string?)
@@ -28,8 +29,10 @@
     (let [leases (some-> (k8s/list-leases k8s-client claims-namespace)
                          :items)]
       (doseq [lease leases]
-        (let [ln  (get-in lease [:metadata :name])
-              uid (get-in lease [:spec :holderIdentity])]
+        (let [ln     (get-in lease [:metadata :name])
+              pod-ns (or (get-in lease [:metadata :labels :fudo.org/pod.namespace])
+                         (get-in lease [:metadata :labels "fudo.org/pod.namespace"]))
+              uid    (get-in lease [:spec :holderIdentity])]
           (cond
             (or (nil? uid) (empty? uid))
             (log/debug logger (format "lease %s/%s has no holderIdentity; skipping"
@@ -37,10 +40,10 @@
 
             :else
             (try
-              (if-let [pod (k8s/get-pod-by-uid k8s-client uid)]
+              (if-let [pod (k8s/get-pod-by-uid k8s-client pod-ns uid)]
                 (if (active-pod? pod)
                   (do (k8s/patch-lease k8s-client claims-namespace ln
-                                       {:spec {:renewTime (now-rfc3339)}})
+                                       {:spec {:renewTime (time/now-rfc3339-micro)}})
                       (log/debug logger (format "renewed %s/%s for pod %s/%s (uid=%s)"
                                                 claims-namespace ln
                                                 (get-in pod [:metadata :namespace])
