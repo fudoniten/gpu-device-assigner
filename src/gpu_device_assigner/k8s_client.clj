@@ -20,7 +20,7 @@
     (try
       (k8s/invoke client req)
       (catch Exception e
-        (throw (ex-info (format "error  during kubernetes api invocation: %s" (.getMessage e))
+        (throw (ex-info (format "error during kubernetes api invocation: %s" (.getMessage e))
                         {:stack-trace (with-out-str (print-stack-trace e))
                          :status      (:status e)
                          :error       e}))))))
@@ -51,7 +51,7 @@
   (str (lease-collection-path namespace) "/" name))
 
 (defrecord K8SClient
-    [client]
+    [client logger]
 
     IK8SClient
     (get-node [_ node-name]
@@ -131,10 +131,12 @@
                          :body     merge-patch}}))
 
     (list-leases [_ namespace]
-      (invoke client
-              {:kind    :Lease
-               :action  :list
-               :request {:raw-path (lease-collection-path namespace)}}))
+      (let [path (lease-collection-path namespace)]
+        (log/warn logger (format "*** PATH IS: %s" path))
+        (invoke client
+                {:kind    :Lease
+                 :action  :list
+                 :request {:raw-path path}})))
 
     (get-pod-by-uid [_ uid]
       ;; fieldSelector works cluster-wide when you hit /api/v1/pods at the root
@@ -196,7 +198,7 @@
   "Create a new Kubernetes client with the given configuration."
   [& {:keys [logger url] :as req}]
   (try
-    (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data]))))
+    (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data]))) logger)
     (catch Exception e
       (log/fatal logger (str "failed to create k8s-client: " (.getMessage e)))
       (throw (ex-info "failed to create k8s-client" {:error e})))))

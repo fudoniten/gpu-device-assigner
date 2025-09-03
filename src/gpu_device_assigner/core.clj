@@ -54,20 +54,20 @@
 (defn lease-name [uuid] (str "gpu-" (name uuid)))
 
 (defn lease-body
-  "Build a Lease object. `pod-ident` must include :uid.
+  "Build a Lease object.
    `opts` may include {:node <node-name> :extra-labels {\"k\":\"v\" ...}}.
    The client sets :metadata.namespace when POSTing."
-  ([uuid]
-   (lease-body uuid nil))
-  ([uuid {:keys [node extra-labels]}]
+  ([device-uuid host-uid]
+   (lease-body device-uuid host-uid {}))
+  ([device-uuid host-uid {:keys [node extra-labels]}]
    {:apiVersion "coordination.k8s.io/v1"
     :kind "Lease"
-    :metadata {:name      (lease-name uuid)
-               :namespace nil  ;; set by client
-               :labels    (cond-> {:fudo.org/gpu.uuid (name uuid)}
-                             node (assoc :fudo.org/gpu.node (name node))
-                             (seq extra-labels) (merge extra-labels))}
-    :spec {:holderIdentity       uid
+    :metadata {:name      (lease-name device-uuid)
+               :namespace nil ;; set by client
+               :labels    (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
+                            node (assoc :fudo.org/gpu.node (name node))
+                            (seq extra-labels) (merge extra-labels))}
+    :spec {:holderIdentity       host-uid
            :leaseDurationSeconds default-lease-seconds
            :acquireTime          (now-rfc3339)
            :renewTime            (now-rfc3339)}}))
@@ -89,10 +89,10 @@
    - POST Lease -> 201 => win
    - 409 => GET; if expired => PATCH renew+holderIdentity => win
    - else lose"
-  [{:keys [k8s-client logger] :as ctx} uuid pod-identity]
+  [{:keys [k8s-client logger] :as ctx} device-uuid host-uid]
   (let [ns   (claims-namespace ctx)
-        nm   (lease-name uuid)
-        body (lease-body uuid)]
+        nm   (lease-name device-uuid)
+        body (lease-body device-uuid host-uid)]
     (try
       (let [{:keys [status]} (k8s/create-lease k8s-client ns nm body)]
         (cond
@@ -102,14 +102,14 @@
           (let [{lease :body} (k8s/get-lease k8s-client ns nm)]
             (if (lease-expired? lease)
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
-                                                      {:spec {:holderIdentity (:uid pod-identity)
+                                                      {:spec {:holderIdentity host-uid
                                                               :renewTime (now-rfc3339)}})]
                 (<= 200 status 299))
               false))
 
           :else false))
       (catch Exception e
-        (log/error logger (str "lease claim error for " (name uuid) ": " (.getMessage e)))
+        (log/error logger (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
         (log/debug logger (with-out-str (print-stack-trace e)))
         false))))
 
@@ -209,14 +209,14 @@
                      device-labels)))
 
 (s/fdef pick-device
-  :args (s/cat :ctx    ::context/context
-               :uid    string?
-               :labels ::device-labels)
+  :args (s/cat :ctx      ::context/context
+               :host-uid string?
+               :labels   ::device-labels)
   :ret  (s/keys :req-un [::device-id ::node]))
 (defn pick-device
   "Pick the first candidate device whose Lease we can claim atomically.
    Returns {:device-id <uuid> :node <node>} or nil."
-  [{:keys [logger] :as ctx} uid labels]
+  [{:keys [logger] :as ctx} host-uid labels]
   (try
     (let [device-labels (get-all-device-labels ctx)]
       (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
@@ -228,10 +228,10 @@
                                (pprint-string matching)))
         ;; Iterate deterministically or randomly; here we randomize to spread load
         (let [order (shuffle (keys matching))]
-          (some (fn [dev-id]
-                  (when (try-claim-uuid! ctx dev-id uid)
-                    {:device-id dev-id
-                     :node      (-> matching dev-id :node)}))
+          (some (fn [dev-uuid]
+                  (when (try-claim-uuid! ctx dev-uuid host-uid)
+                    {:device-id dev-uuid
+                     :node      (-> matching dev-uuid :node)}))
                 order))))
     (catch Exception e
       (throw (ex-info "Failed to pick device via Lease"
