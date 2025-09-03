@@ -47,7 +47,7 @@
 (defn claims-namespace
   "Namespace for Lease objects (centralized). You can also plumb this via ctx."
   [ctx]
-  (or (:claims-namespace ctx) "gpu-claims"))
+  (get ctx :claims-namespace "gpu-claims"))
 
 (def default-lease-seconds 300)
 
@@ -57,15 +57,14 @@
   "Build a Lease object. `pod-ident` must include :uid.
    `opts` may include {:node <node-name> :extra-labels {\"k\":\"v\" ...}}.
    The client sets :metadata.namespace when POSTing."
-  ([pod-ident uuid]
-   (lease-body pod-ident uuid nil))
-  ([{:keys [uid]} uuid {:keys [node extra-labels]}]
+  ([uuid]
+   (lease-body uuid nil))
+  ([uuid {:keys [node extra-labels]}]
    {:apiVersion "coordination.k8s.io/v1"
     :kind "Lease"
     :metadata {:name      (lease-name uuid)
                :namespace nil  ;; set by client
-               :labels    (cond-> {:fudo.org/gpu.uuid (name uuid)
-                                   :fudo.org/pod.uid uid}
+               :labels    (cond-> {:fudo.org/gpu.uuid (name uuid)}
                              node (assoc :fudo.org/gpu.node (name node))
                              (seq extra-labels) (merge extra-labels))}
     :spec {:holderIdentity       uid
@@ -93,7 +92,7 @@
   [{:keys [k8s-client logger] :as ctx} uuid pod-identity]
   (let [ns   (claims-namespace ctx)
         nm   (lease-name uuid)
-        body (lease-body pod-identity uuid)]
+        body (lease-body uuid)]
     (try
       (let [{:keys [status]} (k8s/create-lease k8s-client ns nm body)]
         (cond
@@ -111,6 +110,7 @@
           :else false))
       (catch Exception e
         (log/error logger (str "lease claim error for " (name uuid) ": " (.getMessage e)))
+        (log/debug logger (with-out-str (print-stack-trace e)))
         false))))
 
 ;;;; ==== node annotations
@@ -210,12 +210,13 @@
 
 (s/fdef pick-device
   :args (s/cat :ctx    ::context/context
+               :uid    string?
                :labels ::device-labels)
   :ret  (s/keys :req-un [::device-id ::node]))
 (defn pick-device
   "Pick the first candidate device whose Lease we can claim atomically.
    Returns {:device-id <uuid> :node <node>} or nil."
-  [{:keys [logger] :as ctx} labels]
+  [{:keys [logger] :as ctx} uid labels]
   (try
     (let [device-labels (get-all-device-labels ctx)]
       (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
@@ -228,7 +229,7 @@
         ;; Iterate deterministically or randomly; here we randomize to spread load
         (let [order (shuffle (keys matching))]
           (some (fn [dev-id]
-                  (when (try-claim-uuid! ctx dev-id {:uid (get-in logger [:pod-uid] "unknown")})
+                  (when (try-claim-uuid! ctx dev-id uid)
                     {:device-id dev-id
                      :node      (-> matching dev-id :node)}))
                 order))))
@@ -242,14 +243,13 @@
   "Claim a GPU via Lease and return the JSONPatch-ready info."
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
   ;; Make UID available to pick-device -> try-claim-uuid!
-  (let [ctx* (assoc-in ctx [:logger :pod-uid] uid)]
-    (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE" (pick-device ctx* requested-labels))]
-      (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
-                                   device-id namespace pod node))
-          {:device-id device-id :pod pod :namespace namespace :node node})
-      (do (log/error logger (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                                    namespace pod (str/join "," (map name requested-labels))))
-          nil))))
+  (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE" (pick-device ctx uid requested-labels))]
+    (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
+                                 device-id namespace pod node))
+        {:device-id device-id :pod pod :namespace namespace :node node})
+    (do (log/error logger (format "no free device (by Lease) for pod %s/%s, labels [%s]"
+                                  namespace pod (str/join "," (map name requested-labels))))
+        nil)))
 
 (defn json-middleware
   "Middleware to encode/decode the JSON body of requests/responses."

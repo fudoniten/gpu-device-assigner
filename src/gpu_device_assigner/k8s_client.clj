@@ -108,7 +108,8 @@
     (create-lease [_ namespace name lease-body]
       ;; POST to the collection; ensure metadata.name/namespace are set in body
       (let [body (-> lease-body
-                     (update :metadata #(assoc (or % {}) :name name :namespace namespace)))]
+                     (assoc-in [:metadata :name] name)
+                     (assoc-in [:metadata :namespace] namespace))]
         (invoke client
                 {:kind    :Lease
                  :action  :create
