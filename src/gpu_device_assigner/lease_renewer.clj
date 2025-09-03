@@ -23,6 +23,7 @@
 (defn renew-leases-once!
   "List leases in CLAIMS_NS; renew those whose holder pod is still active."
   [{:keys [logger k8s-client claims-namespace]}]
+  (assert (string? claims-namespace))
   (try
     (let [leases (some-> (k8s/list-leases k8s-client claims-namespace)
                          :items)]
