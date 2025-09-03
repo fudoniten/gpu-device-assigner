@@ -52,7 +52,15 @@
 
 (def default-lease-seconds 300)
 
-(defn lease-name [uuid] (str "gpu-" (name uuid)))
+(defn sanitize-for-dns ^String [^String s]
+  (-> s
+      (str/lower-case)
+      (str/replace #"[^a-z0-9.-]" "-")
+      (str/replace #"^[^a-z0-9]+" "")
+      (str/replace #"[^a-z0-9]+$" "")))
+
+(defn lease-name [gpu-uuid]
+  (sanitize-for-dns (name gpu-uuid)))
 
 (defn lease-body
   "Build a Lease object.
@@ -86,27 +94,30 @@
       true)))
 
 (defn try-claim-uuid!
-  "Atomic claim attempt:
+  "Atmoic claim attempt:
    - POST Lease -> 201 => win
    - 409 => GET; if expired => PATCH renew+holderIdentity => win
    - else lose"
-  [{:keys [k8s-client logger namespace] :as ctx} device-uuid host-uid]
+  [{:keys [k8s-client logger namespace] :as ctx} device-uuid pod-uid]
   (let [pod-ns namespace
         ns   (claims-namespace ctx)
         nm   (lease-name device-uuid)
-        body (lease-body device-uuid host-uid
+        body (lease-body device-uuid pod-uid
                          {"fudo.org/pod.namespace" pod-ns})]
     (try
       (let [{:keys [status]} (k8s/create-lease k8s-client ns nm body)]
         (cond
-          (= 201 status) true
+          (= 201 status)
+          (do (log/info logger (format "successfully claimed gpu %s for pod %s"
+                                       device-uuid pod-uid))
+              true)
 
           (= 409 status)
           (let [{lease :body} (k8s/get-lease k8s-client ns nm)]
             (if (lease-expired? lease)
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
-                                                      {:spec {:holderIdentity host-uid
-                                                              :renewTime (now-rfc3339)}})]
+                                                      {:spec {:holderIdentity pod-uid
+                                                              :renewTime (time/now-rfc3339-micro)}})]
                 (<= 200 status 299))
               false))
 
@@ -219,7 +230,7 @@
 (defn pick-device
   "Pick the first candidate device whose Lease we can claim atomically.
    Returns {:device-id <uuid> :node <node>} or nil."
-  [{:keys [logger] :as ctx} host-uid labels]
+  [{:keys [logger] :as ctx} pod-uid labels]
   (try
     (let [device-labels (get-all-device-labels ctx)]
       (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
@@ -232,7 +243,8 @@
         ;; Iterate deterministically or randomly; here we randomize to spread load
         (let [order (shuffle (keys matching))]
           (some (fn [dev-uuid]
-                  (when (try-claim-uuid! ctx dev-uuid host-uid)
+                  (when (try-claim-uuid! ctx dev-uuid pod-uid)
+                    (log/info logger (str "\n******\n*** CLAIMED DEVICE %s\n******" dev-uuid))
                     {:device-id dev-uuid
                      :node      (-> matching dev-uuid :node)}))
                 order))))

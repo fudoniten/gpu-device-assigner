@@ -18,12 +18,20 @@
   IK8SBaseClient
   (invoke [_ req]
     (try
-      (k8s/invoke client req)
+      (assoc (k8s/invoke client req)
+             :error false)
       (catch Exception e
-        (throw (ex-info (format "error during kubernetes api invocation: %s" (.getMessage e))
-                        {:stack-trace (with-out-str (print-stack-trace e))
-                         :status      (:status e)
-                         :error       e}))))))
+        (let [data (ex-data e)]
+          (if-let [status (get-in data [:response :status])]
+            {:type    (:type data)
+             :status  status
+             :body    (get-in data [:response :body])
+             :headers (get-in data [:response :headers])
+             :error   true}
+            (throw (ex-info (format "error during k8s api invocation: %s"
+                                    (.getMessage e))
+                            {:stack-trace (with-out-str (print-stack-trace e))
+                             :error e}))))))))
 
 (defprotocol IK8SClient
   "Protocol defining Kubernetes client operations."
@@ -126,7 +134,7 @@
       ;; Use JSON Merge Patch for Leases (spec.renewTime / holderIdentity, etc.)
       (invoke client
               {:kind    :Lease
-               :action  :patch/merge
+               :action  :patch/json-merge
                :request {:name      name
                          :namespace namespace
                          :body      merge-patch}}))
