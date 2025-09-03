@@ -26,10 +26,12 @@
             src = ./.;
           };
 
-          deployContainers = helpers.deployContainers {
+          deployContainer = helpers.deployContainers {
             name = "gpu-device-assigner";
             tags = [ "latest" ];
-            entrypoint = [ "${gpuDeviceAssigner}/bin/gpu-device-assigner" ];
+            entrypoint = let
+              gpuDeviceAssigner = self.packages."${system}".gpuDeviceAssigner;
+            in [ "${gpuDeviceAssigner}/bin/gpu-device-assigner" ];
             verbose = true;
           };
         };
@@ -49,6 +51,16 @@
           };
           gpuDeviceAssignerServer = pkgs.mkShell {
             buildInputs = with self.packages."${system}"; [ gpuDeviceAssigner ];
+          };
+        };
+
+        apps = rec {
+          default = deployContainer;
+          deployContainer = {
+            type = "app";
+            program =
+              let deployContainer = self.packages."${system}".deployContainer;
+              in "${deployContainer}";
           };
         };
       });
