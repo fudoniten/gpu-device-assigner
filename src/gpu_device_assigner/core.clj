@@ -9,6 +9,7 @@
             [gpu-device-assigner.context :as context]
             [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
+            [gpu-device-assigner.lease-renewer :as renewer]
 
             [reitit.ring :as ring]
             [cheshire.core :as json]
@@ -47,22 +48,31 @@
 (defn claims-namespace
   "Namespace for Lease objects (centralized). You can also plumb this via ctx."
   [ctx]
-  (or (:claims-namespace ctx) "gpu-claims"))
+  (or (::renewer/claims-namespace ctx) "gpu-claims"))
 
 (def default-lease-seconds 300)
 
 (defn lease-name [uuid] (str "gpu-" (name uuid)))
 
 (defn lease-body
-  [{:keys [uid]} uuid]
-  {:apiVersion "coordination.k8s.io/v1"
-   :kind "Lease"
-   :metadata {:name      (lease-name uuid)
-              :namespace nil} ; set by client
-   :spec {:holderIdentity       uid
-          :leaseDurationSeconds default-lease-seconds
-          :acquireTime          (now-rfc3339)
-          :renewTime            (now-rfc3339)}})
+  "Build a Lease object. `pod-ident` must include :uid.
+   `opts` may include {:node <node-name> :extra-labels {\"k\":\"v\" ...}}.
+   The client sets :metadata.namespace when POSTing."
+  ([pod-ident uuid]
+   (lease-body pod-ident uuid nil))
+  ([{:keys [uid]} uuid {:keys [node extra-labels]}]
+   {:apiVersion "coordination.k8s.io/v1"
+    :kind "Lease"
+    :metadata {:name      (lease-name uuid)
+               :namespace nil  ;; set by client
+               :labels    (cond-> {:fudo.org/gpu.uuid (name uuid)
+                                   :fudo.org/pod.uid uid}
+                             node (assoc :fudo.org/gpu.node (name node))
+                             (seq extra-labels) (merge extra-labels))}
+    :spec {:holderIdentity       uid
+           :leaseDurationSeconds default-lease-seconds
+           :acquireTime          (now-rfc3339)
+           :renewTime            (now-rfc3339)}}))
 
 (defn lease-expired?
   "Return true if now - renewTime > leaseDurationSeconds (or missing renewTime)."

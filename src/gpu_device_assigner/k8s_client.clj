@@ -34,7 +34,9 @@
   (create-lease       [self namespace name lease-body])
   (get-lease          [self namespace name])
   (patch-lease        [self namespace name merge-path])
+  (list-leases        [self namespace])
 
+  (get-pod-by-uid     [self uid])
   (get-pod            [self pod-name namespace])
   (get-pods           [self])
   (pod-exists?        [self pod-name namespace])
@@ -125,7 +127,20 @@
               {:kind    :Lease
                :action  :patch/merge
                :request {:raw-path (lease-item-path namespace name)
-                         :body     merge-patch}})))
+                         :body     merge-patch}}))
+
+    (list-leases [_ namespace]
+      (invoke client
+              {:kind    :Lease
+               :action  :list
+               :request {:raw-path (lease-collection-path namespace)}}))
+
+    (get-pod-by-uid [_ uid]
+      ;; fieldSelector works cluster-wide when you hit /api/v1/pods at the root
+      (let [raw (format "/api/v1/pods?fieldSelector=metadata.uid=%s" uid)
+            res (invoke client {:kind :Pod :action :list :request {:raw-path raw}})
+            pod (first (:items res))]
+        pod)))
 
 (defn base64-string?
   "Check if a string is a valid Base64 encoded string."
