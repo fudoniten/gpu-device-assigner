@@ -271,17 +271,12 @@
   "Middleware to ensure some response is passed to the caller."
   [{:keys [logger]}]
   (fn [handler]
-    (fn [{:keys [uid] :as req}]
+    (fn [req]
       (try
         (handler req)
         (catch Exception e
           (log/error logger (format "error handling request: %s" (str e)))
-          (log/debug logger (print-stack-trace
-                             (-> {:apiVersion "admission.k8s.io/v1"
-                                  :kind       "AdmissionReview"
-                                  :response   {:uid     uid
-                                               :allowed true}}
-                                 (try-json-generate))))
+          (log/debug logger (with-out-str (print-stack-trace e)))
           {:status 500
            :headers {:Content-Type "application/json"}
            :body    (json/generate-string {:error (.getMessage e)})})))))
