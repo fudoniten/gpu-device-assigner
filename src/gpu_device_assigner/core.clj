@@ -9,14 +9,13 @@
             [gpu-device-assigner.context :as context]
             [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
-            [gpu-device-assigner.lease-renewer :as renewer]
 
             [reitit.ring :as ring]
             [cheshire.core :as json]
             [ring.util.response :as response]
             [ring.adapter.jetty :as jetty])
   (:import java.util.Base64
-           [java.time Instant OffsetDateTime Duration]))
+           [java.time OffsetDateTime Duration]))
 
 (defn pprint-string [o]
   (with-out-str (pprint o)))
@@ -48,7 +47,7 @@
 (defn claims-namespace
   "Namespace for Lease objects (centralized). You can also plumb this via ctx."
   [ctx]
-  (or (::renewer/claims-namespace ctx) "gpu-claims"))
+  (or (:claims-namespace ctx) "gpu-claims"))
 
 (def default-lease-seconds 300)
 
@@ -158,22 +157,6 @@
   [str]
   (json/parse-string str true))
 
-(defn get-device-reservations
-  "Retrieve current device reservations from node annotations."
-  [ctx node]
-  (try
-    (let [annotations (get-node-annotations ctx node)]
-      (some->> annotations
-               :fudo.org/gpu.device.reservations
-               (base64-decode)
-               (String.)
-               (parse-json)
-               (assoc (select-keys annotations [:resourceVersion]) :reservations)))
-    (catch Exception e
-      (throw (ex-info "Failed to retrieve device reservations"
-                      {:node      node
-                       :exception e})))))
-
 (defn fudo-ns? [o] (= (namespace o) "fudo.org"))
 
 (s/def ::device-labels
@@ -195,26 +178,6 @@
            (base64-decode)
            (String.)
            (parse-json)))
-
-(s/def ::pod string?)
-(s/def ::namespace string?)
-(s/def ::timestamp string?)
-
-(s/def ::device-reservations
-  (s/map-of ::device-id (s/keys :req-un [::pod ::namespace ::timestamp])))
-
-(s/fdef -unpack-device-reservations
-  :args (s/cat :annotations (s/map-of symbol? any?))
-  :ret  ::device-reservations)
-(defn -unpack-device-reservations
-  [annotations]
-  (some-> annotations
-          :fudo.org/gpu.device.reservations
-          (base64-decode)
-          (String.)
-          (parse-json)))
-
-(stest/instrument '-unpack-device-reservations)
 
 (s/fdef get-all-device-labels
   :args ::context/context
@@ -245,17 +208,6 @@
                         (subset? (pthru-label "REQ" req-labels) (pthru-label "AVAIL" device-labels))))
                      device-labels)))
 
-(s/fdef get-all-device-reservations
-  :args (s/cat :ctx ::context/context)
-  :ret  ::device-reservations)
-(defn get-all-device-reservations
-  [{:keys [k8s-client] :as ctx}]
-  (into {}
-        (for [[_ node-annos] (get-all-node-annotations ctx)
-              [device-id {:keys [uid namespace] :as reservation}] (-unpack-device-reservations node-annos)
-              :when (k8s/pod-uid-exists? k8s-client uid namespace)]
-          [device-id reservation])))
-
 (s/fdef pick-device
   :args (s/cat :ctx    ::context/context
                :labels ::device-labels)
@@ -285,43 +237,6 @@
                       {:labels labels :exception e})))))
 
 (stest/instrument 'pick-device)
-
-(defn node-patch
-  "Apply a patch to a Kubernetes node."
-  [{:keys [k8s-client]} node patch]
-  (try
-    (k8s/patch-node k8s-client node patch)
-    (catch Exception e
-      (throw (ex-info "Failed to patch node"
-                      {:node      node
-                       :patch     patch
-                       :exception e})))))
-
-(defn reserve-device
-  [{:keys [logger] :as ctx} {:keys [node device-id pod namespace uid]}]
-  (let [{version :resourceVersion reservations :reservations} (get-device-reservations ctx node)
-        updated-reservations (assoc reservations (name device-id)
-                                    {:pod pod
-                                     :namespace namespace
-                                     :timestamp (.toString (Instant/now))
-                                     :uid uid})
-        reservation-patch {:kind "Node"
-                           :metadata {:annotations
-                                      {:fudo.org/gpu.device.reservations
-                                       (base64-encode (json/generate-string updated-reservations))}}
-                           :resourceVersion version}]
-    (try (node-patch ctx node reservation-patch)
-         {:device-id device-id :pod pod :namespace namespace :node node}
-         (catch Exception e
-           (log/debug logger (with-out-str (pprint e)))
-           (let [status (ex-data e)]
-             (if (= 409 (:status status))
-               (log/error logger (format "conflict: reservation was modified before patch was applied. unable to reserve device %s for pod %s."
-                                         device-id pod))
-               (do (log/error logger (format "error %s: unable to reserve device %s for pod %s: %s"
-                                             (:status status) device-id pod (:message e)))
-                   (log/debug logger (with-out-str (print-stack-trace e)))))
-             nil)))))
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."

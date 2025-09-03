@@ -63,7 +63,7 @@
 (defn run-renewer!
   "Start a loop that periodically renews leases.
    ctx keys: :k8s-client :logger :claims-namespace :renew-interval-ms :jitter"
-  [{:keys [::k8s/logger ::renew-interval-ms ::jitter] :as ctx}]
+  [{:keys [:logger :renew-interval-ms :jitter] :as ctx}]
   (let [interval (long (or renew-interval-ms 60000))
         jt       (double (or jitter 0.2))
         jittered (fn [ms]
