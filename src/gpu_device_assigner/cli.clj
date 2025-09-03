@@ -35,7 +35,7 @@
    ["-p" "--port PORT" "Port on which to listen for incoming requests."
     :default  443
     :parse-fn #(Integer/parseInt %)]
-   ["-C" "--claims-namsepace NAMESPACE" "Namespace in which to store GPU leases."
+   ["-C" "--claims-namespace NAMESPACE" "Namespace in which to store GPU leases."
     :default "gpu-claims"]
    ["-i" "--renew-interval INTERVAL" "Interval at which to renew leases if pod still exists."
     :default 60000

@@ -28,6 +28,7 @@
 
           deployContainer = helpers.deployContainers {
             name = "gpu-device-assigner";
+            repo = "registry.kube.sea.fudo.link";
             tags = [ "latest" ];
             entrypoint = let
               gpuDeviceAssigner = self.packages."${system}".gpuDeviceAssigner;
@@ -60,7 +61,7 @@
             type = "app";
             program =
               let deployContainer = self.packages."${system}".deployContainer;
-              in "${deployContainer}";
+              in "${deployContainer}/bin/deployContainers";
           };
         };
       });
