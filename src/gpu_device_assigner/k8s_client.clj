@@ -31,11 +31,22 @@
   (get-nodes          [self])
   (patch-node         [self node-name patch])
 
+  (create-lease       [self namespace name lease-body])
+  (get-lease          [self namespace name])
+  (patch-lease        [self namespace name merge-path])
+
   (get-pod            [self pod-name namespace])
   (get-pods           [self])
   (pod-exists?        [self pod-name namespace])
   (pod-uid-exists?    [self uid namespace])
   (get-namespace-pods [self namespace]))
+
+;; Internal helpers for Lease API paths
+(defn- lease-collection-path ^String [^String namespace]
+  (format "/apis/coordination.k8s.io/v1/namespaces/%s/leases" namespace))
+
+(defn- lease-item-path ^String [^String namespace ^String name]
+  (str (lease-collection-path namespace) "/" name))
 
 (defrecord K8SClient
     [client]
@@ -90,7 +101,31 @@
       (some (fn [pod]
               (when (= (get-in pod [:metadata :uid]) uid)
                 (boolean pod)))
-            (get-namespace-pods self namespace))))
+            (get-namespace-pods self namespace)))
+
+    (create-lease [_ namespace name lease-body]
+      ;; POST to the collection; ensure metadata.name/namespace are set in body
+      (let [body (-> lease-body
+                     (update :metadata #(assoc (or % {}) :name name :namespace namespace)))]
+        (invoke client
+                {:kind    :Lease
+                 :action  :create
+                 :request {:raw-path (lease-collection-path namespace)
+                           :body     body}})))
+
+    (get-lease [_ namespace name]
+      (invoke client
+              {:kind    :Lease
+               :action  :get
+               :request {:raw-path (lease-item-path namespace name)}}))
+
+    (patch-lease [_ namespace name merge-patch]
+      ;; Use JSON Merge Patch for Leases (spec.renewTime / holderIdentity, etc.)
+      (invoke client
+              {:kind    :Lease
+               :action  :patch/merge
+               :request {:raw-path (lease-item-path namespace name)
+                         :body     merge-patch}})))
 
 (defn base64-string?
   "Check if a string is a valid Base64 encoded string."

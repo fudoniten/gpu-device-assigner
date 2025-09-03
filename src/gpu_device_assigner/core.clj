@@ -15,7 +15,7 @@
             [ring.util.response :as response]
             [ring.adapter.jetty :as jetty])
   (:import java.util.Base64
-           java.time.Instant))
+           [java.time Instant OffsetDateTime Duration]))
 
 (defn pprint-string [o]
   (with-out-str (pprint o)))
@@ -38,6 +38,73 @@
     (catch Exception e
       (throw (ex-info "exception encountered when generating json string"
                       {:body str :exception e})))))
+
+;;;; ==== Lease helpers
+
+(defn now-rfc3339 ^String []
+  (.toString (OffsetDateTime/now)))
+
+(defn claims-namespace
+  "Namespace for Lease objects (centralized). You can also plumb this via ctx."
+  [ctx]
+  (or (:claims-namespace ctx) "gpu-claims"))
+
+(def default-lease-seconds 300)
+
+(defn lease-name [uuid] (str "gpu-" (name uuid)))
+
+(defn lease-body
+  [{:keys [uid]} uuid]
+  {:apiVersion "coordination.k8s.io/v1"
+   :kind "Lease"
+   :metadata {:name      (lease-name uuid)
+              :namespace nil} ; set by client
+   :spec {:holderIdentity       uid
+          :leaseDurationSeconds default-lease-seconds
+          :acquireTime          (now-rfc3339)
+          :renewTime            (now-rfc3339)}})
+
+(defn lease-expired?
+  "Return true if now - renewTime > leaseDurationSeconds (or missing renewTime)."
+  [lease]
+  (let [spec (:spec lease)
+        dur  (long (or (:leaseDurationSeconds spec) default-lease-seconds))]
+    (if-let [rt (:renewTime spec)]
+      (let [then (OffsetDateTime/parse rt)
+            age  (Duration/between then (OffsetDateTime/now))]
+        (> (.getSeconds age) dur))
+      ;; No renew time in lease
+      true)))
+
+(defn try-claim-uuid!
+  "Atomic claim attempt:
+   - POST Lease -> 201 => win
+   - 409 => GET; if expired => PATCH renew+holderIdentity => win
+   - else lose"
+  [{:keys [k8s-client logger] :as ctx} uuid pod-identity]
+  (let [ns   (claims-namespace ctx)
+        nm   (lease-name uuid)
+        body (lease-body pod-identity uuid)]
+    (try
+      (let [{:keys [status]} (k8s/create-lease k8s-client ns nm body)]
+        (cond
+          (= 201 status) true
+
+          (= 409 status)
+          (let [{lease :body} (k8s/get-lease k8s-client ns nm)]
+            (if (lease-expired? lease)
+              (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
+                                                      {:spec {:holderIdentity (:uid pod-identity)
+                                                              :renewTime (now-rfc3339)}})]
+                (<= 200 status 299))
+              false))
+
+          :else false))
+      (catch Exception e
+        (log/error logger (str "lease claim error for " (name uuid) ": " (.getMessage e)))
+        false))))
+
+;;;; ==== node annotations
 
 (defn get-node-annotations
   "Retrieve annotations from a Kubernetes node."
@@ -183,26 +250,29 @@
   :args (s/cat :ctx    ::context/context
                :labels ::device-labels)
   :ret  (s/keys :req-un [::device-id ::node]))
-(defn pick-device [{:keys [logger] :as ctx} labels]
+(defn pick-device
+  "Pick the first candidate device whose Lease we can claim atomically.
+   Returns {:device-id <uuid> :node <node>} or nil."
+  [{:keys [logger] :as ctx} labels]
   (try
-    (let [device-labels (get-all-device-labels ctx)
-          reservations  (-> (get-all-device-reservations ctx) (keys) (set))]
+    (let [device-labels (get-all-device-labels ctx)]
       (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
                              (pprint-string labels)))
       (log/debug logger (str "\n##########\n#  DEVICES\n##########\n\n"
                              (pprint-string device-labels)))
-      (log/debug logger (str "\n##########\n#  RESERVATIONS\n##########\n\n"
-                             (pprint-string reservations)))
-      (let [matching      (find-matching-devices device-labels labels)
-            available     (into {} (filter (fn [[dev-id _]] (not (reservations dev-id)))) matching)]
-        (if (empty? (keys available))
-          nil
-          (let [selected-id (rand-nth (keys available))]
-            {:device-id selected-id :node (-> (pthru-label "AVAILABLE" available) selected-id :node)}))))
+      (let [matching (find-matching-devices device-labels labels)]
+        (log/debug logger (str "\n##########\n#  MATCHING\n##########\n\n"
+                               (pprint-string matching)))
+        ;; Iterate deterministically or randomly; here we randomize to spread load
+        (let [order (shuffle (keys matching))]
+          (some (fn [dev-id]
+                  (when (try-claim-uuid! ctx dev-id {:uid (get-in logger [:pod-uid] "unknown")})
+                    {:device-id dev-id
+                     :node      (-> matching dev-id :node)}))
+                order))))
     (catch Exception e
-      (throw (ex-info "Failed to pick device"
-                      {:labels labels
-                       :exception e})))))
+      (throw (ex-info "Failed to pick device via Lease"
+                      {:labels labels :exception e})))))
 
 (stest/instrument 'pick-device)
 
@@ -244,18 +314,17 @@
              nil)))))
 
 (defn assign-device
-  "Assign a GPU device to a pod based on requested labels."
+  "Claim a GPU via Lease and return the JSONPatch-ready info."
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
-  (if-let [device (pthru-label "PICKED DEVICE" (pick-device ctx requested-labels))]
-    (let [{:keys [device-id node]} device]
-      (log/info logger
-                (format "attempting to reserve device %s on node %s to pod %s/%s"
-                        device-id node namespace pod))
-      (reserve-device ctx {:node node :device-id device-id :pod pod :namespace namespace :uid uid}))
-    (do (log/error logger
-                   (format "unable to find device to reserve for pod %s/%s, labels [%s]"
-                           namespace pod (str/join "," (map name requested-labels))))
-        nil)))
+  ;; Make UID available to pick-device -> try-claim-uuid!
+  (let [ctx* (assoc-in ctx [:logger :pod-uid] uid)]
+    (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE" (pick-device ctx* requested-labels))]
+      (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
+                                   device-id namespace pod node))
+          {:device-id device-id :pod pod :namespace namespace :node node})
+      (do (log/error logger (format "no free device (by Lease) for pod %s/%s, labels [%s]"
+                                    namespace pod (str/join "," (map name requested-labels))))
+          nil))))
 
 (defn json-middleware
   "Middleware to encode/decode the JSON body of requests/responses."
@@ -311,19 +380,19 @@
                   :patch     patch})})
 
 (defn device-assignment-patch
-  "Generate a JSON patch for assigning a device to a pod."
+  "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs."
   [{:keys [logger]} device-id node]
-  (let [patch [{:op    "add"
-                :path  "/metadata/annotations"
-                :value {}}
-               {:op    "add"
-                :path  "/metadata/annotations/cdi.k8s.io~1gpu-assignment"
-                :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
-               {:op    "add"
-                :path  "/spec/nodeName"
-                :value (name node)}]]
-    (log/debug logger (str "\n##########\n#  PATCH\n##########\n\n"
-                           (pprint-string patch)))
+  (let [patch
+        [{:op "add" :path "/metadata/annotations" :value {}}
+         ;; Breadcrumbs for ops / GC tools
+         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.uuid" :value (name device-id)}
+         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.node" :value (name node)}
+         ;; Your CDI assignment (unchanged form)
+         {:op "add" :path "/metadata/annotations/cdi.k8s.io~1gpu-assignment"
+          :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
+         ;; Hard bind to the node that actually has this UUID
+         {:op "add" :path "/spec/nodeName" :value (name node)}]]
+    (log/debug logger (str "\n##########\n#  PATCH\n##########\n\n" (pprint-string patch)))
     (-> patch
         (json/generate-string)
         (base64-encode))))
@@ -349,31 +418,38 @@
                     :status  {:code    400
                               :message (format "Unexpected request kind: %s" kind)}}})
     (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pprint-string req)))
-    (let [fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
+    (let [dry-run?         (true? (get-in req [:request :dryRun]))
+          fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
           label-enabled?   (fn [[_ v]] v)
           gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
           remove-assign    (fn [[k _]] (not= k :fudo.org/gpu.assign))
           uid              (get-in req [:request :uid])
-          pod              (get-in req [:request :object :metadata :generateName])
+          pod              (or (get-in req [:request :object :metadata :name])
+                               (get-in req [:request :object :metadata :generateName]))
           namespace        (get-in req [:request :object :metadata :namespace])
           all-labels       (get-in req [:request :object :metadata :labels])
           requested-labels (->> all-labels
                                (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
                                (keys)
                                (set))]
-      (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
-                               namespace pod (str/join "," (map name requested-labels))))
-      (if-let [assigned-device (assign-device ctx {:pod              pod
-                                                   :uid              uid
-                                                   :namespace        namespace
-                                                   :requested-labels requested-labels})]
-        (let [{:keys [device-id pod node]} assigned-device]
-          (log/info (:logger ctx) (format "Assigned device %s to pod %s/%s on node %s" device-id namespace pod node))
-          (admission-review-response :uid uid :allowed? true
-                                     :patch (device-assignment-patch ctx device-id node)))
-        (do (log/error (:logger ctx) (format "Failed to find unreserved device for pod %s/%s" namespace pod))
-            (admission-review-response :uid uid :status 500 :allowed? false
-                                       :message (format "failed to find unreserved device for pod %s/%s." namespace pod)))))))
+      (if dry-run?
+        (do (log/info logger "dry-run AdmissionReview; skipping Lease allocation")
+            (admission-review-response :uid uid :allowed? true
+                                       :status 200
+                                       :message "dry-run: no mutation"))
+
+        (do (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
+                                     namespace pod (str/join "," (map name requested-labels))))
+            (if-let [assigned-device (assign-device ctx {:pod              pod
+                                                         :uid              uid
+                                                         :namespace        namespace
+                                                         :requested-labels requested-labels})]
+              (let [{:keys [device-id pod node]} assigned-device]
+                (admission-review-response :uid uid :allowed? true
+                                           :patch (device-assignment-patch ctx device-id node)))
+              (admission-review-response :uid uid :status 429 :allowed? false
+                                         :message (format "no GPUs with requested labels free for pod %s/%s"
+                                                          namespace pod))))))))
 
 (defn app [ctx]
   (ring/ring-handler
