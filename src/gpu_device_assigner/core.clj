@@ -42,8 +42,9 @@
 
 ;;;; ==== Lease helpers
 
-(defn now-rfc3339 ^String []
-  (.toString (OffsetDateTime/now)))
+(defn get-claim-id [req]
+  (or (get-in req [:request :object :metadata :uid])
+      (get-in req [:request :uid])))
 
 (defn claims-namespace
   "Namespace for Lease objects (centralized). You can also plumb this via ctx."
@@ -66,9 +67,9 @@
   "Build a Lease object.
    `opts` may include {:node <node-name> :extra-labels {\"k\":\"v\" ...}}.
    The client sets :metadata.namespace when POSTing."
-  ([device-uuid host-uid]
-   (lease-body device-uuid host-uid {}))
-  ([device-uuid host-uid {:keys [node extra-labels]}]
+  ([device-uuid pod-uid]
+   (lease-body device-uuid pod-uid {}))
+  ([device-uuid pod-uid {:keys [node extra-labels]}]
    {:apiVersion "coordination.k8s.io/v1"
     :kind "Lease"
     :metadata {:name      (lease-name device-uuid)
@@ -76,7 +77,7 @@
                :labels    (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
                             node (assoc :fudo.org/gpu.node (name node))
                             (seq extra-labels) (merge extra-labels))}
-    :spec {:holderIdentity       host-uid
+    :spec {:holderIdentity       pod-uid
            :leaseDurationSeconds default-lease-seconds
            :acquireTime          (time/now-rfc3339-micro)
            :renewTime            (time/now-rfc3339-micro)}}))
@@ -98,14 +99,15 @@
    - POST Lease -> 201 => win
    - 409 => GET; if expired => PATCH renew+holderIdentity => win
    - else lose"
-  [{:keys [k8s-client logger namespace] :as ctx} device-uuid pod-uid]
+  [{:keys [k8s-client logger namespace pod] :as ctx} device-uuid pod-uid]
   (let [pod-ns namespace
         ns   (claims-namespace ctx)
         nm   (lease-name device-uuid)
         body (lease-body device-uuid pod-uid
-                         {"fudo.org/pod.namespace" pod-ns})]
+                         {"fudo.org/pod.namespace" pod-ns
+                          "fudo.org/pod.name" pod})]
     (try
-      (let [{:keys [status]} (k8s/create-lease k8s-client ns nm body)]
+      (let [{:keys [status]} (pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
           (do (log/info logger (format "successfully claimed gpu %s for pod %s"
@@ -118,10 +120,17 @@
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
                                                       {:spec {:holderIdentity pod-uid
                                                               :renewTime (time/now-rfc3339-micro)}})]
+                (log/info logger (format "attempting to claim gpu %s for pod %s"
+                                         device-uuid pod-uid))
                 (<= 200 status 299))
-              false))
+              (do (log/warn logger (format "failed to claim gpu %s for pod %s, unexpired lease exists"
+                                           device-uuid pod-uid))
+                  false)))
 
-          :else false))
+          :else
+          (do (log/error logger (format "unexpected error claiming gpu %s for pod %s"
+                                        device-uuid pod-uid))
+              false)))
       (catch Exception e
         (log/error logger (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
         (log/debug logger (with-out-str (print-stack-trace e)))
@@ -259,7 +268,10 @@
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
   ;; Make UID available to pick-device -> try-claim-uuid!
   (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE"
-                                                 (pick-device (assoc ctx :namespace namespace) uid requested-labels))]
+                                                 (pick-device (assoc ctx
+                                                                     :namespace namespace
+                                                                     :pod pod)
+                                                              uid requested-labels))]
     (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
                                  device-id namespace pod node))
         {:device-id device-id :pod pod :namespace namespace :node node})
@@ -360,6 +372,7 @@
           gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
           remove-assign    (fn [[k _]] (not= k :fudo.org/gpu.assign))
           uid              (get-in req [:request :uid])
+          pod-uid          (get-claim-id req)
           pod              (or (get-in req [:request :object :metadata :name])
                                (get-in req [:request :object :metadata :generateName]))
           namespace        (get-in req [:request :object :metadata :namespace])
@@ -377,10 +390,10 @@
         (do (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
                                      namespace pod (str/join "," (map name requested-labels))))
             (if-let [assigned-device (assign-device ctx {:pod              pod
-                                                         :uid              uid
+                                                         :uid              pod-uid
                                                          :namespace        namespace
                                                          :requested-labels requested-labels})]
-              (let [{:keys [device-id pod node]} assigned-device]
+              (let [{:keys [device-id node]} assigned-device]
                 (admission-review-response :uid uid :allowed? true
                                            :patch (device-assignment-patch ctx device-id node)))
               (admission-review-response :uid uid :status 429 :allowed? false

@@ -19,7 +19,8 @@
   (invoke [_ req]
     (try
       (assoc (k8s/invoke client req)
-             :error false)
+             :status 200
+             :error  false)
       (catch Exception e
         (let [data (ex-data e)]
           (if-let [status (get-in data [:response :status])]
