@@ -202,7 +202,7 @@
 
 (s/fdef create
   :args (s/keys* :req-un [::url ::token ::certificate-authority-data]
-                 :opt-un [:timeout])
+                 :opt-un [::timeout])
   :ret  ::client)
 (defn create
   "Create a new Kubernetes client with the given configuration."
