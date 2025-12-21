@@ -11,11 +11,19 @@
 (s/def ::renew-interval-ms integer?)
 (s/def ::jitter decimal?)
 
-(defn now-rfc3339 ^String [] (.toString (OffsetDateTime/now)))
+(defn now-rfc3339
+  "Return the current time as an RFC3339 string."
+  ^String []
+  (.toString (OffsetDateTime/now)))
 
-(defn sleep! [ms] (Thread/sleep (long ms)))
+(defn sleep!
+  "Sleep for the provided number of milliseconds."
+  [ms]
+  (Thread/sleep (long ms)))
 
-(defn active-pod? [pod]
+(defn active-pod?
+  "Return true when the pod is running or pending and not deleting."
+  [pod]
   (let [phase (keyword (or (get-in pod [:status :phase]) "Unknown"))
         deleting? (some? (get-in pod [:metadata :deletionTimestamp]))]
     (and (not deleting?)

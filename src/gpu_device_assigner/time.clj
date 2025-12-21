@@ -8,6 +8,8 @@
   (-> (DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH:mm:ss.SSSSSSX")
       (.withZone ZoneOffset/UTC)))
 
-(defn now-rfc3339-micro ^String []
+(defn now-rfc3339-micro
+  "Return the current time formatted as RFC3339 with microsecond precision."
+  ^String []
   (let [inst (.truncatedTo (Instant/now) ChronoUnit/MICROS)]
     (.format rfc3339-micro inst)))
