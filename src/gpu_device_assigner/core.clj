@@ -18,22 +18,30 @@
   (:import java.util.Base64
            [java.time OffsetDateTime Duration]))
 
-(defn pprint-string [o]
+(defn pprint-string
+  "Pretty-print an object to a string for readable logging."
+  [o]
   (with-out-str (pprint o)))
 
-(defn pthru-label [lbl o]
+(defn pthru-label
+  "Log a labeled value and return it unchanged."
+  [lbl o]
   (println (str "###### " lbl))
   (pprint o)
   o)
 
-(defn try-json-parse [str]
+(defn try-json-parse
+  "Parse a JSON string, throwing an informative exception on failure."
+  [str]
   (try
     (json/parse-string str true)
     (catch Exception e
       (throw (ex-info "exception encountered when parsing json string"
                       {:body str :exception e})))))
 
-(defn try-json-generate [json]
+(defn try-json-generate
+  "Generate a JSON string, throwing an informative exception on failure."
+  [json]
   (try
     (json/generate-string json)
     (catch Exception e
@@ -42,7 +50,9 @@
 
 ;;;; ==== Lease helpers
 
-(defn get-claim-id [req]
+(defn get-claim-id
+  "Extract the AdmissionReview request UID for the pod being mutated."
+  [req]
   (or (get-in req [:request :object :metadata :uid])
       (get-in req [:request :uid])))
 
@@ -53,14 +63,18 @@
 
 (def default-lease-seconds 300)
 
-(defn sanitize-for-dns ^String [^String s]
+(defn sanitize-for-dns
+  "Convert a string into a DNS-safe, lowercase token."
+  ^String [^String s]
   (-> s
       (str/lower-case)
       (str/replace #"[^a-z0-9.-]" "-")
       (str/replace #"^[^a-z0-9]+" "")
       (str/replace #"[^a-z0-9]+$" "")))
 
-(defn lease-name [gpu-uuid]
+(defn lease-name
+  "Format a Kubernetes Lease name from a GPU UUID."
+  [gpu-uuid]
   (sanitize-for-dns (name gpu-uuid)))
 
 (defn lease-body
@@ -146,6 +160,7 @@
       :annotations))
 
 (defn get-all-node-annotations
+  "Fetch annotations for every node in the cluster."
   [{:keys [k8s-client]}]
   (into {}
         (map (fn [node]
@@ -180,7 +195,10 @@
   [str]
   (json/parse-string str true))
 
-(defn fudo-ns? [o] (= (namespace o) "fudo.org"))
+(defn fudo-ns?
+  "True when a keyword or symbol belongs to the fudo.org namespace."
+  [o]
+  (= (namespace o) "fudo.org"))
 
 (s/def ::device-labels
   (s/and set?
@@ -195,6 +213,7 @@
   :args (s/cat :annotations (s/map-of symbol? any?))
   :ret  ::device-labels)
 (defn -unpack-device-labels
+  "Decode and parse device label data from node annotations."
   [annotations]
   (some->> annotations
            :fudo.org/gpu.device.labels
@@ -206,6 +225,7 @@
   :args ::context/context
   :ret  ::device-node-map)
 (defn get-all-device-labels
+  "Extract device label metadata for all nodes."
   [ctx]
   (apply merge
          (map (fn [[node annos]]
@@ -223,6 +243,7 @@
                :req-labels    ::device-labels)
   :ret  ::device-labels)
 (defn find-matching-devices
+  "Filter devices whose labels satisfy the requested label set."
   [device-labels req-labels]
   (pthru-label "MATCHING DEVICES"
                (into {}
@@ -346,6 +367,7 @@
         (base64-encode))))
 
 (defn log-requests-middleware
+  "Middleware that logs requests and responses at debug level."
   [{:keys [logger]}]
   (fn [handler]
     (fn [req]
@@ -400,7 +422,9 @@
                                          :message (format "no GPUs with requested labels free for pod %s/%s"
                                                           namespace pod))))))))
 
-(defn app [ctx]
+(defn app
+  "Construct the Ring application with routing and middleware."
+  [ctx]
   (ring/ring-handler
    (ring/router [["/mutate" {:post (handle-mutation ctx)}]]
                 {:data {:middleware [(log-requests-middleware ctx)

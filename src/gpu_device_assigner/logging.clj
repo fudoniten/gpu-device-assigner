@@ -10,7 +10,10 @@
   (debug [self msg]))
 
 (def LOG-LEVELS [:fatal :error :warn :info :debug])
-(defn log-index [log-level] (.indexOf LOG-LEVELS log-level))
+(defn log-index
+  "Return the position of `log-level` within `LOG-LEVELS`."
+  [log-level]
+  (.indexOf LOG-LEVELS log-level))
 
 (defn print-logger
   "Create a simple logger that prints messages to the console."

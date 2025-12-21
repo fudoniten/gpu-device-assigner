@@ -45,11 +45,13 @@
     :parse-fn #(Double/parseDouble %)]])
 
 (defn msg-quit
+  "Print a message and exit the process with the given status."
   [status msg]
   (println msg)
   (System/exit status))
 
 (defn usage
+  "Render a usage string with optional error messages."
   ([summary] (usage summary []))
   ([summary errs] (str/join \newline
                             (concat errs
@@ -59,6 +61,7 @@
                                      summary]))))
 
 (defn parse-opts
+  "Parse CLI arguments and report missing required options."
   [args reqs cli-opts]
   (let [{:keys [options] :as result} (cli/parse-opts args cli-opts)
         missing (set/difference reqs (-> options (keys) (set)))
@@ -67,6 +70,7 @@
     (update result :errors concat missing-errs)))
 
 (defn -main
+  "Entry point for the gpu-device-assigner CLI."
   [& args]
   (let [default-logger (log/print-logger :info)
         required-args #{:access-token :ca-certificate :kubernetes-url :port}
