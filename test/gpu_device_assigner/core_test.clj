@@ -57,7 +57,28 @@
         (is (= "123abc" (get-in response [:response :uid])))
         (is (false? (get-in response [:response :allowed])))))))
 
-(let [mock-k8s-client (fn [& {:keys [gpu-label-map]
+    (testing "Handle request where no device can be assigned"
+        (with-redefs [core/assign-device (constantly nil)]
+          (let [ctx {:logger mock-logger :claims-namespace "gpu-claims"}
+                handle-mutation-fn (http/handle-mutation ctx)
+                request {:kind "AdmissionReview"
+                         :request {:uid "123abc"
+                                 :object {:metadata {:name "test-pod"
+                                                     :namespace "default"
+                                                     :labels {:fudo.org/gpu.test "true"}},
+                                          :spec {:nodeName "node1"}}}}
+                response (handle-mutation-fn request)]
+          (is (= "AdmissionReview" (:kind response)))
+          (is (= "123abc" (get-in response [:response :uid])))
+          (is (= false (get-in response [:response :allowed]))))))))
+
+(let [mock-logger (reify log/Logger
+                    (fatal [_ _])
+                    (error [_ _])
+                    (warn  [_ _])
+                    (info  [_ _])
+                    (debug [_ _]))
+      mock-k8s-client (fn [& {:keys [gpu-label-map]
                              :or   {gpu-label-map {:gpu1 #{:fudo.org/gpu.test}}}}]
                         (k8s/->K8SClient
                          (reify k8s/IK8SBaseClient
