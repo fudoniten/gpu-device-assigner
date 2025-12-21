@@ -6,8 +6,8 @@
             [ring.util.response :as response]
 
             [gpu-device-assigner.core :as core]
-            [gpu-device-assigner.logging :as log]
-            [gpu-device-assigner.util :as util]))
+            [gpu-device-assigner.util :as util]
+            [taoensso.timbre :as log]))
 
 (defn json-middleware
   "Middleware to encode/decode the JSON body of requests/responses."
@@ -26,14 +26,14 @@
 
 (defn open-fail-middleware
   "Middleware to ensure some response is passed to the caller."
-  [{:keys [logger]}]
+  [_]
   (fn [handler]
     (fn [req]
       (try
         (handler req)
         (catch Exception e
-          (log/error logger (format "error handling request: %s" (str e)))
-          (log/debug logger (with-out-str (print-stack-trace e)))
+          (log/error (format "error handling request: %s" (str e)))
+          (log/debug (with-out-str (print-stack-trace e)))
           {:status 500
            :headers {:Content-Type "application/json"}
            :body    (util/try-json-generate {:error (.getMessage e)})})))))
@@ -58,7 +58,7 @@
 
 (defn device-assignment-patch
   "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs."
-  [{:keys [logger]} device-id node]
+  [_ device-id node]
   (let [patch
         [{:op "add" :path "/metadata/annotations" :value {}}
          ;; Breadcrumbs for ops / GC tools
@@ -69,23 +69,23 @@
           :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
          ;; Hard bind to the node that actually has this UUID
          {:op "add" :path "/spec/nodeName" :value (name node)}]]
-    (log/debug logger (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
+    (log/debug (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
     (-> patch
         (util/try-json-generate)
         (util/base64-encode))))
 
 (defn log-requests-middleware
-  [{:keys [logger]}]
+  [_]
   (fn [handler]
     (fn [req]
-      (log/debug logger (str "\n\n##########\n# REQUEST\n##########\n\n" (util/pprint-string req)))
+      (log/debug (str "\n\n##########\n# REQUEST\n##########\n\n" (util/pprint-string req)))
       (let [res (handler req)]
-        (log/debug logger (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
+        (log/debug (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
         res))))
 
 (defn handle-mutation
   "Handle an AdmissionReview request for mutating a pod's annotations."
-  [{:keys [logger] :as ctx}]
+  [ctx]
   (fn [{:keys [kind] :as req}]
     (when-not (= kind "AdmissionReview")
       {:apiVersion "admission.k8s.io/v1"
@@ -94,7 +94,7 @@
                     :allowed false
                     :status  {:code    400
                               :message (format "Unexpected request kind: %s" kind)}}})
-    (log/debug logger (format "Received AdmissionReview request: %s" (util/pprint-string req)))
+    (log/debug (format "Received AdmissionReview request: %s" (util/pprint-string req)))
     (let [dry-run?         (true? (get-in req [:request :dryRun]))
           fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
           label-enabled?   (fn [[_ v]] v)
@@ -111,13 +111,13 @@
                                (keys)
                                (set))]
       (if dry-run?
-        (do (log/info logger "dry-run AdmissionReview; skipping Lease allocation")
+        (do (log/info "dry-run AdmissionReview; skipping Lease allocation")
             (admission-review-response :uid uid :allowed? true
                                        :status 200
                                        :message "dry-run: no mutation"))
 
-        (do (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
-                                     namespace pod (str/join "," (map name requested-labels))))
+        (do (log/info (format "processing pod %s/%s, requesting labels [%s]"
+                              namespace pod (str/join "," (map name requested-labels))))
             (if-let [assigned-device (core/assign-device ctx {:pod              pod
                                                               :uid              pod-uid
                                                               :namespace        namespace

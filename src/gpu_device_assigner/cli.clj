@@ -7,19 +7,21 @@
 
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.context :as ctx]
-            [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.http :as http]
-            [gpu-device-assigner.lease-renewer :as renewer])
+            [gpu-device-assigner.lease-renewer :as renewer]
+            [taoensso.timbre :as log])
   (:import java.lang.Double)
   (:gen-class))
+
+(def log-levels #{:trace :debug :info :warn :error :fatal :report})
 
 (def cli-opts
   [["-l" "--log-level LOG-LEVEL" "Level at which to log output."
     :default  :warn
     :parse-fn keyword
-    :validate [(set log/LOG-LEVELS)
+    :validate [log-levels
                (str "invalid log level, must be one of "
-                    (str/join ", " (map name log/LOG-LEVELS)))]]
+                    (str/join ", " (map name log-levels)))]]
    ["-h" "--help" "Print this message."]
 
    ["-t" "--access-token ACCESS-TOKEN" "Path to token file for Kubernetes access."
@@ -67,12 +69,12 @@
 
 (defn -main
   [& args]
-  (let [default-logger (log/print-logger :info)
-        required-args #{:access-token :ca-certificate :kubernetes-url :port}
+  (let [required-args #{:access-token :ca-certificate :kubernetes-url :port}
         {:keys [options _ errors summary]} (parse-opts args required-args cli-opts)]
     (when (:help options) (msg-quit 0 (usage summary)))
     (when (seq errors) (msg-quit 1 (usage summary errors)))
-    (log/info default-logger "starting gpu-device-assigner...")
+    (log/set-min-level! (:log-level options))
+    (log/info "starting gpu-device-assigner...")
     (try
       (let [{:keys [access-token
                     ca-certificate
@@ -82,36 +84,32 @@
                     claims-namespace
                     renew-interval
                     renew-jitter]} options
-            logger (log/print-logger log-level)
             client (k8s/create :url kubernetes-url
                                :timeout 120000 ; Set timeout to 120 seconds
                                :certificate-authority-data (k8s/load-certificate ca-certificate)
-                               :token (k8s/load-access-token access-token)
-                               :logger logger)
-            ctx (ctx/create ::log/logger logger
-                            ::k8s/client client
+                               :token (k8s/load-access-token access-token))
+            ctx (ctx/create ::k8s/client client
                             ::renewer/claims-namespace claims-namespace
                             ::renewer/renew-interval-ms renew-interval
                             ::renewer/jitter renew-jitter)
             shutdown-signal (promise)]
-        (log/debug logger "creating shutdown hook...")
+        (log/set-min-level! log-level)
+        (log/debug "creating shutdown hook...")
         (.addShutdownHook (Runtime/getRuntime)
                           (Thread. (fn []
-                                     (log/info logger "received shutdown request")
+                                     (log/info "received shutdown request")
                                      (deliver shutdown-signal true))))
-        (log/info logger "Starting gpu-device-assigner web service...")
-        (log/debug logger (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
-                                  access-token ca-certificate kubernetes-url port log-level))
+        (log/info "Starting gpu-device-assigner web service...")
+        (log/debug (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
+                           access-token ca-certificate kubernetes-url port log-level))
         (let [server (http/start-server ctx port)
               renewer-future (future (renewer/run-renewer! ctx))]
           @shutdown-signal
-          (log/warn logger "Stopping gpu-device-assigner lease renewal service...")
+          (log/warn "Stopping gpu-device-assigner lease renewal service...")
           (future-cancel renewer-future)
-          (log/warn logger "Stopping gpu-device-assigner web service...")
+          (log/warn "Stopping gpu-device-assigner web service...")
           (.stop server)))
       (catch Exception e
-        (log/error default-logger
-                   (format "error in main: %s" (.getMessage e)))
-        (log/debug default-logger
-                   (print-stack-trace e))))
+        (log/error (format "error in main: %s" (.getMessage e)))
+        (log/debug (with-out-str (print-stack-trace e)))))
     (msg-quit 0 "stopping gpu-device-assigner...")))
