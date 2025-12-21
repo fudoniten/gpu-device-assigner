@@ -2,7 +2,6 @@
   (:require [clojure.string :as str]
             [clojure.stacktrace :refer [print-stack-trace]]
             [clojure.set :refer [subset?]]
-            [clojure.pprint :refer [pprint]]
             [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as stest]
 
@@ -10,43 +9,13 @@
             [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
+            [gpu-device-assigner.util :as util]
 
             [reitit.ring :as ring]
             [cheshire.core :as json]
             [ring.util.response :as response]
             [ring.adapter.jetty :as jetty])
-  (:import java.util.Base64
-           [java.time OffsetDateTime Duration]))
-
-(defn pprint-string
-  "Pretty-print an object to a string for readable logging."
-  [o]
-  (with-out-str (pprint o)))
-
-(defn pthru-label
-  "Log a labeled value and return it unchanged."
-  [lbl o]
-  (println (str "###### " lbl))
-  (pprint o)
-  o)
-
-(defn try-json-parse
-  "Parse a JSON string, throwing an informative exception on failure."
-  [str]
-  (try
-    (json/parse-string str true)
-    (catch Exception e
-      (throw (ex-info "exception encountered when parsing json string"
-                      {:body str :exception e})))))
-
-(defn try-json-generate
-  "Generate a JSON string, throwing an informative exception on failure."
-  [json]
-  (try
-    (json/generate-string json)
-    (catch Exception e
-      (throw (ex-info "exception encountered when generating json string"
-                      {:body str :exception e})))))
+  (:import [java.time OffsetDateTime Duration]))
 
 ;;;; ==== Lease helpers
 
@@ -63,19 +32,10 @@
 
 (def default-lease-seconds 300)
 
-(defn sanitize-for-dns
-  "Convert a string into a DNS-safe, lowercase token."
-  ^String [^String s]
-  (-> s
-      (str/lower-case)
-      (str/replace #"[^a-z0-9.-]" "-")
-      (str/replace #"^[^a-z0-9]+" "")
-      (str/replace #"[^a-z0-9]+$" "")))
-
 (defn lease-name
   "Format a Kubernetes Lease name from a GPU UUID."
   [gpu-uuid]
-  (sanitize-for-dns (name gpu-uuid)))
+  (util/sanitize-for-dns (name gpu-uuid)))
 
 (defn lease-body
   "Build a Lease object.
@@ -121,7 +81,7 @@
                          {"fudo.org/pod.namespace" pod-ns
                           "fudo.org/pod.name" pod})]
     (try
-      (let [{:keys [status]} (pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
+      (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
           (do (log/info logger (format "successfully claimed gpu %s for pod %s"
@@ -168,33 +128,6 @@
                 (-> node :metadata :annotations)]))
         (k8s/get-nodes k8s-client)))
 
-(defn base64-encode
-  "Encode a string to Base64."
-  [str]
-  (let [encoder (Base64/getEncoder)]
-    (.encodeToString encoder (.getBytes str "UTF-8"))))
-
-(defn base64-decode
-  "Decode a Base64 encoded string."
-  [b64-str]
-  (let [decoder (Base64/getDecoder)]
-    (try
-      (.decode decoder b64-str)
-      (catch Exception e
-        (println (format "failed to decode base64 string: %s: %s"
-                         b64-str (.getMessage e)))
-        (throw e)))))
-
-(defn map-vals
-  "Apply a function to all values in a map."
-  [f m]
-  (into {} (map (fn [[k v]] [k (f v)])) m))
-
-(defn parse-json
-  "Parse a JSON string into a Clojure data structure."
-  [str]
-  (json/parse-string str true))
-
 (defn fudo-ns?
   "True when a keyword or symbol belongs to the fudo.org namespace."
   [o]
@@ -217,9 +150,9 @@
   [annotations]
   (some->> annotations
            :fudo.org/gpu.device.labels
-           (base64-decode)
+           (util/base64-decode)
            (String.)
-           (parse-json)))
+           (util/parse-json)))
 
 (s/fdef get-all-device-labels
   :args ::context/context
@@ -245,11 +178,11 @@
 (defn find-matching-devices
   "Filter devices whose labels satisfy the requested label set."
   [device-labels req-labels]
-  (pthru-label "MATCHING DEVICES"
+  (util/pthru-label "MATCHING DEVICES"
                (into {}
                      (filter
                       (fn [[_ {device-labels :labels}]]
-                        (subset? (pthru-label "REQ" req-labels) (pthru-label "AVAIL" device-labels))))
+                        (subset? (util/pthru-label "REQ" req-labels) (util/pthru-label "AVAIL" device-labels))))
                      device-labels)))
 
 (s/fdef pick-device
@@ -264,12 +197,12 @@
   (try
     (let [device-labels (get-all-device-labels ctx)]
       (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
-                             (pprint-string labels)))
+                             (util/pprint-string labels)))
       (log/debug logger (str "\n##########\n#  DEVICES\n##########\n\n"
-                             (pprint-string device-labels)))
+                             (util/pprint-string device-labels)))
       (let [matching (find-matching-devices device-labels labels)]
         (log/debug logger (str "\n##########\n#  MATCHING\n##########\n\n"
-                               (pprint-string matching)))
+                               (util/pprint-string matching)))
         ;; Iterate deterministically or randomly; here we randomize to spread load
         (let [order (shuffle (keys matching))]
           (some (fn [dev-uuid]
@@ -288,11 +221,11 @@
   "Claim a GPU via Lease and return the JSONPatch-ready info."
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
   ;; Make UID available to pick-device -> try-claim-uuid!
-  (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE"
-                                                 (pick-device (assoc ctx
-                                                                     :namespace namespace
-                                                                     :pod pod)
-                                                              uid requested-labels))]
+  (if-let [{:keys [device-id node]} (util/pthru-label "PICKED DEVICE"
+                                                      (pick-device (assoc ctx
+                                                                          :namespace namespace
+                                                                          :pod pod)
+                                                                   uid requested-labels))]
     (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
                                  device-id namespace pod node))
         {:device-id device-id :pod pod :namespace namespace :node node})
@@ -309,9 +242,9 @@
           :body
           :body ;; Who knows wtf??
           (slurp)
-          (try-json-parse)
+          (util/try-json-parse)
           (handler)
-          (try-json-generate)
+          (util/try-json-generate)
           (response/response)
           (assoc-in [:headers "Content-Type"] "application/json"))
       (throw (ex-info "missing request body!" {:req req})))))
@@ -361,19 +294,19 @@
           :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
          ;; Hard bind to the node that actually has this UUID
          {:op "add" :path "/spec/nodeName" :value (name node)}]]
-    (log/debug logger (str "\n##########\n#  PATCH\n##########\n\n" (pprint-string patch)))
+    (log/debug logger (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
     (-> patch
         (json/generate-string)
-        (base64-encode))))
+        (util/base64-encode))))
 
 (defn log-requests-middleware
   "Middleware that logs requests and responses at debug level."
   [{:keys [logger]}]
   (fn [handler]
     (fn [req]
-      (log/debug logger (str "\n\n##########\n# REQUEST\n##########\n\n" (pprint-string req)))
+      (log/debug logger (str "\n\n##########\n# REQUEST\n##########\n\n" (util/pprint-string req)))
       (let [res (handler req)]
-        (log/debug logger (str "\n\n##########\n# RESPONSE\n##########\n\n" (pprint-string res)))
+        (log/debug logger (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
         res))))
 
 (defn handle-mutation
@@ -387,7 +320,7 @@
                     :allowed false
                     :status  {:code    400
                               :message (format "Unexpected request kind: %s" kind)}}})
-    (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pprint-string req)))
+    (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (util/pprint-string req)))
     (let [dry-run?         (true? (get-in req [:request :dryRun]))
           fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
           label-enabled?   (fn [[_ v]] v)
