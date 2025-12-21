@@ -14,13 +14,39 @@
   (testing "Base64 decoding"
     (is (= "Hello world" (String. (util/base64-decode "SGVsbG8gd29ybGQ=") "UTF-8")))))
 
+(deftest test-map-vals
+  (testing "Applying a function to all values in a map"
+    (is (= {:a 2 :b 3} (util/map-vals inc {:a 1 :b 2})))))
+
+(deftest test-parse-json
+  (testing "Parsing JSON string into Clojure data structure"
+    (is (= {:key "value"} (util/parse-json "{\"key\": \"value\"}")))))
+
 (deftest test-handle-mutation
   (let [mock-logger (reify log/Logger
                       (fatal [_ _])
                       (error [_ _])
                       (warn  [_ _])
                       (info  [_ _])
-                      (debug [_ _]))]
+                      (debug [_ _]))
+        mock-k8s-client (fn [& {:keys [gpu-label-map gpu-reservations]
+                               :or   {gpu-label-map {:gpu1 #{:fudo.org/gpu.test}}
+                                      gpu-reservations {:gpu1 {:pod "other-pod" :namespace "default"}}}}]
+                          (k8s/->K8SClient
+                           (reify k8s/IK8SBaseClient
+                             (invoke [_ {:keys [kind action request]}]
+                               (let [node {:metadata {:name "node1"
+                                                      :annotations {:fudo.org/gpu.device.labels
+                                                                    (util/base64-encode (util/try-json-generate gpu-label-map))
+                                                                    :fudo.org/gpu.device.reservations
+                                                                    (util/base64-encode (util/try-json-generate gpu-reservations))}}}]
+                                 (case [kind action]
+                                   [:Node :list] {:items [node]}
+                                   [:Node :get]  node
+                                   [:Pod :get] (if (= "other-pod" (:name request))
+                                                 {:name (:name request) :namespace (:namespace request)}
+                                                 (throw (ex-info "Not found" {:type :not-found})))
+                                   [:Node :patch/json] true))))))]
     (testing "Handle valid mutation request"
       (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1"})]
         (let [ctx {:logger mock-logger}
@@ -75,9 +101,10 @@
                         (k8s/->K8SClient
                          (reify k8s/IK8SBaseClient
                            (invoke [_ {:keys [kind action request]}]
-                             (let [node {:metadata {:name "node1"
-                                                    :annotations {:fudo.org/gpu.device.labels
-                                                                  (util/base64-encode (util/try-json-generate gpu-label-map))}}}]
+                             (let [node {:metadata {:annotations {:fudo.org/gpu.device.labels
+                                                                  (util/base64-encode (util/try-json-generate gpu-label-map))
+                                                                  :fudo.org/gpu.device.reservations
+                                                                  (util/base64-encode (util/try-json-generate gpu-reservations))}}}]
                                (case [kind action]
                                  [:Node :list] {:items [node]}
                                  [:Node :get]  node))))))]
@@ -93,10 +120,19 @@
         (is (= "gpu1" (:device-id result)))
         (is (= "node1" (:node result))))))
 
-  (testing "Fail when a matching device cannot be claimed"
-    (with-redefs [core/try-claim-uuid! (fn [_ _ _] false)]
-      (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client)}
-            result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.test}})]
-        (is (nil? result))))))
+  (testing "Succeed if a matching device is found, and is reserved but by a pod that no longer exists"
+    (let [ctx {:logger mock-logger
+               :k8s-client (k8s/->K8SClient
+                            (reify k8s/IK8SBaseClient
+                              (invoke [_ {:keys [kind action]}]
+                                (case [kind action]
+                                  [:Node :list] [{:metadata {:annotations {:fudo.org/gpu.device.labels
+                                                                           (util/base64-encode (util/try-json-generate {"gpu1" #{"label1"}}))
+                                                                           :fudo.org/gpu.device.reservations
+                                                                           (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}})}}}]
+                                  [:Pod :get] (throw (ex-info "Not found" {:type :not-found}))
+                                  [:Node :patch/json] true))))}
+          result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
+      (is (= "gpu1" result)))))
 
 (run-tests 'gpu-device-assigner.core-test)

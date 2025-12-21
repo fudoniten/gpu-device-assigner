@@ -2,7 +2,6 @@
   (:require [clojure.string :as str]
             [clojure.stacktrace :refer [print-stack-trace]]
             [clojure.set :refer [subset?]]
-            [clojure.pprint :refer [pprint]]
             [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as stest]
 
@@ -13,14 +12,11 @@
             [gpu-device-assigner.util :as util])
   (:import [java.time OffsetDateTime Duration]))
 
-(defn pthru-label [lbl o]
-  (println (str "###### " lbl))
-  (pprint o)
-  o)
-
 ;;;; ==== Lease helpers
 
-(defn get-claim-id [req]
+(defn get-claim-id
+  "Extract the AdmissionReview request UID for the pod being mutated."
+  [req]
   (or (get-in req [:request :object :metadata :uid])
       (get-in req [:request :uid])))
 
@@ -31,7 +27,9 @@
 
 (def default-lease-seconds 300)
 
-(defn lease-name [gpu-uuid]
+(defn lease-name
+  "Format a Kubernetes Lease name from a GPU UUID."
+  [gpu-uuid]
   (util/sanitize-for-dns (name gpu-uuid)))
 
 (defn lease-body
@@ -78,7 +76,7 @@
                          {"fudo.org/pod.namespace" pod-ns
                           "fudo.org/pod.name" pod})]
     (try
-      (let [{:keys [status]} (pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
+      (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
           (do (log/info logger (format "successfully claimed gpu %s for pod %s"
@@ -117,6 +115,7 @@
       :annotations))
 
 (defn get-all-node-annotations
+  "Fetch annotations for every node in the cluster."
   [{:keys [k8s-client]}]
   (into {}
         (map (fn [node]
@@ -124,7 +123,10 @@
                 (-> node :metadata :annotations)]))
         (k8s/get-nodes k8s-client)))
 
-(defn fudo-ns? [o] (= (namespace o) "fudo.org"))
+(defn fudo-ns?
+  "True when a keyword or symbol belongs to the fudo.org namespace."
+  [o]
+  (= (namespace o) "fudo.org"))
 
 (s/def ::device-labels
   (s/and set?
@@ -139,17 +141,19 @@
   :args (s/cat :annotations (s/map-of symbol? any?))
   :ret  ::device-labels)
 (defn -unpack-device-labels
+  "Decode and parse device label data from node annotations."
   [annotations]
   (some->> annotations
            :fudo.org/gpu.device.labels
            (util/base64-decode)
            (String.)
-           (util/try-json-parse)))
+           (util/parse-json)))
 
 (s/fdef get-all-device-labels
   :args ::context/context
   :ret  ::device-node-map)
 (defn get-all-device-labels
+  "Extract device label metadata for all nodes."
   [ctx]
   (apply merge
          (map (fn [[node annos]]
@@ -167,12 +171,13 @@
                :req-labels    ::device-labels)
   :ret  ::device-labels)
 (defn find-matching-devices
+  "Filter devices whose labels satisfy the requested label set."
   [device-labels req-labels]
-  (pthru-label "MATCHING DEVICES"
+  (util/pthru-label "MATCHING DEVICES"
                (into {}
                      (filter
                       (fn [[_ {device-labels :labels}]]
-                        (subset? (pthru-label "REQ" req-labels) (pthru-label "AVAIL" device-labels))))
+                        (subset? (util/pthru-label "REQ" req-labels) (util/pthru-label "AVAIL" device-labels))))
                      device-labels)))
 
 (s/fdef pick-device
@@ -211,11 +216,11 @@
   "Claim a GPU via Lease and return the JSONPatch-ready info."
   [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
   ;; Make UID available to pick-device -> try-claim-uuid!
-  (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE"
-                                                 (pick-device (assoc ctx
-                                                                     :namespace namespace
-                                                                     :pod pod)
-                                                              uid requested-labels))]
+  (if-let [{:keys [device-id node]} (util/pthru-label "PICKED DEVICE"
+                                                      (pick-device (assoc ctx
+                                                                          :namespace namespace
+                                                                          :pod pod)
+                                                                   uid requested-labels))]
     (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
                                  device-id namespace pod node))
         {:device-id device-id :pod pod :namespace namespace :node node})

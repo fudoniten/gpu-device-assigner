@@ -53,10 +53,14 @@
   (get-namespace-pods [self namespace]))
 
 ;; Internal helpers for Lease API paths
-(defn- lease-collection-path ^String [^String namespace]
+(defn- lease-collection-path
+  "Build the Lease collection API path for a namespace."
+  ^String [^String namespace]
   (format "/apis/coordination.k8s.io/v1/namespaces/%s/leases" namespace))
 
-(defn- lease-item-path ^String [^String namespace ^String name]
+(defn- lease-item-path
+  "Build the Lease item API path for a namespace/name pair."
+  ^String [^String namespace ^String name]
   (str (lease-collection-path namespace) "/" name))
 
 (defrecord K8SClient
@@ -196,6 +200,7 @@
   (-> cert-file (slurp) (str/trim)))
 
 (defn load-access-token
+  "Load an access token from a file and trim whitespace."
   [token-file]
   (-> token-file (slurp) (str/trim)))
 
