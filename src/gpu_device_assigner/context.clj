@@ -6,10 +6,12 @@
             [gpu-device-assigner.lease-renewer :as renewer]))
 
 (s/def ::context
-  (s/keys :req-un [::log/logger ::k8s/client]))
+  (s/keys :req-un [::log/logger ::k8s/client ::renewer/claims-namespace]
+          :opt-un [::renewer/renew-interval-ms ::renewer/jitter]))
 
 (s/fdef create
-  :args (s/keys* :req [::log/logger ::k8s/client])
+  :args (s/keys* :req [::log/logger ::k8s/client ::renewer/claims-namespace]
+                 :opt [::renewer/renew-interval-ms ::renewer/jitter])
   :ret  ::context)
 (defn create
   "Create a new context with a logger and Kubernetes client."
@@ -21,6 +23,6 @@
       :or   {logger (log/print-logger :warn)}}]
   {:logger     logger
    :k8s-client client
-   :claims-namsepace claims-namespace
+   :claims-namespace claims-namespace
    :renew-interval-ms renew-interval-ms
    :jitter jitter})
