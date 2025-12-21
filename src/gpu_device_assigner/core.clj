@@ -179,7 +179,7 @@
   :args (s/cat :ctx      ::context/context
                :host-uid string?
                :labels   ::device-labels)
-  :ret  (s/keys :req-un [::device-id ::node]))
+  :ret  (s/nilable (s/keys :req-un [::device-id ::node])))
 (defn pick-device
   "Pick the first candidate device whose Lease we can claim atomically.
    Returns {:device-id <uuid> :node <node>} or nil."
