@@ -80,7 +80,8 @@
                                                                   (util/base64-encode (util/try-json-generate gpu-label-map))}}}]
                                (case [kind action]
                                  [:Node :list] {:items [node]}
-                                 [:Node :get]  node))))))]
+                                 [:Node :get]  node))))
+                         mock-logger))]
     (testing "Fail if no matching device is found"
       (let [ctx {:logger mock-logger :claims-namespace "gpu-claims" :k8s-client (mock-k8s-client)}
             result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.other}})]
