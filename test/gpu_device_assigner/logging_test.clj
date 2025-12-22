@@ -1,46 +1,80 @@
 (ns gpu-device-assigner.logging-test
   (:require [clojure.test :refer [deftest is testing run-tests]]
+            [taoensso.timbre :as timbre]
             [gpu-device-assigner.logging :as log]))
+
+(defn- with-log-capture
+  [level f]
+  (let [captured (atom [])
+        capture-appender {:enabled? true
+                          :async? false
+                          :min-level nil
+                          :fn (fn [{:keys [level msg_]}]
+                                (swap! captured conj {:level level :msg (force msg_)}))}]
+    (timbre/with-merged-config
+      {:appenders {:capture capture-appender
+                   :println {:enabled? false}}
+       :min-level :trace}
+      (let [logger (log/print-logger level)]
+        (f logger captured)))))
+
+(defn- logged-messages
+  [entries]
+  (map :msg entries))
 
 (deftest test-print-logger
   (testing "Logger at :fatal level"
-    (let [logger (log/print-logger :fatal)]
-      (is (= "Fatal message\n" (with-out-str (log/fatal logger "Fatal message"))))
-      (is (= "" (with-out-str (log/error logger "Error message"))))
-      (is (= "" (with-out-str (log/warn logger "Warn message"))))
-      (is (= "" (with-out-str (log/info logger "Info message"))))
-      (is (= "" (with-out-str (log/debug logger "Debug message"))))))
+    (with-log-capture :fatal
+      (fn [logger captured]
+        (log/fatal logger "Fatal message")
+        (log/error logger "Error message")
+        (log/warn logger "Warn message")
+        (log/info logger "Info message")
+        (log/debug logger "Debug message")
+        (is (= ["Fatal message"] (logged-messages @captured))))))
 
   (testing "Logger at :error level"
-    (let [logger (log/print-logger :error)]
-      (is (= "Fatal message\n" (with-out-str (log/fatal logger "Fatal message"))))
-      (is (= "Error message\n" (with-out-str (log/error logger "Error message"))))
-      (is (= "" (with-out-str (log/warn logger "Warn message"))))
-      (is (= "" (with-out-str (log/info logger "Info message"))))
-      (is (= "" (with-out-str (log/debug logger "Debug message"))))))
+    (with-log-capture :error
+      (fn [logger captured]
+        (log/fatal logger "Fatal message")
+        (log/error logger "Error message")
+        (log/warn logger "Warn message")
+        (log/info logger "Info message")
+        (log/debug logger "Debug message")
+        (is (= ["Fatal message" "Error message"]
+               (logged-messages @captured))))))
 
   (testing "Logger at :warn level"
-    (let [logger (log/print-logger :warn)]
-      (is (= "Fatal message\n" (with-out-str (log/fatal logger "Fatal message"))))
-      (is (= "Error message\n" (with-out-str (log/error logger "Error message"))))
-      (is (= "Warn message\n" (with-out-str (log/warn logger "Warn message"))))
-      (is (= "" (with-out-str (log/info logger "Info message"))))
-      (is (= "" (with-out-str (log/debug logger "Debug message"))))))
+    (with-log-capture :warn
+      (fn [logger captured]
+        (log/fatal logger "Fatal message")
+        (log/error logger "Error message")
+        (log/warn logger "Warn message")
+        (log/info logger "Info message")
+        (log/debug logger "Debug message")
+        (is (= ["Fatal message" "Error message" "Warn message"]
+               (logged-messages @captured))))))
 
   (testing "Logger at :info level"
-    (let [logger (log/print-logger :info)]
-      (is (= "Fatal message\n" (with-out-str (log/fatal logger "Fatal message"))))
-      (is (= "Error message\n" (with-out-str (log/error logger "Error message"))))
-      (is (= "Warn message\n" (with-out-str (log/warn logger "Warn message"))))
-      (is (= "Info message\n" (with-out-str (log/info logger "Info message"))))
-      (is (= "" (with-out-str (log/debug logger "Debug message"))))))
+    (with-log-capture :info
+      (fn [logger captured]
+        (log/fatal logger "Fatal message")
+        (log/error logger "Error message")
+        (log/warn logger "Warn message")
+        (log/info logger "Info message")
+        (log/debug logger "Debug message")
+        (is (= ["Fatal message" "Error message" "Warn message" "Info message"]
+               (logged-messages @captured))))))
 
   (testing "Logger at :debug level"
-    (let [logger (log/print-logger :debug)]
-      (is (= "Fatal message\n" (with-out-str (log/fatal logger "Fatal message"))))
-      (is (= "Error message\n" (with-out-str (log/error logger "Error message"))))
-      (is (= "Warn message\n" (with-out-str (log/warn logger "Warn message"))))
-      (is (= "Info message\n" (with-out-str (log/info logger "Info message"))))
-      (is (= "Debug message\n" (with-out-str (log/debug logger "Debug message")))))))
+    (with-log-capture :debug
+      (fn [logger captured]
+        (log/fatal logger "Fatal message")
+        (log/error logger "Error message")
+        (log/warn logger "Warn message")
+        (log/info logger "Info message")
+        (log/debug logger "Debug message")
+        (is (= ["Fatal message" "Error message" "Warn message" "Info message" "Debug message"]
+               (logged-messages @captured)))))))
 
 (run-tests)
