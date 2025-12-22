@@ -6,39 +6,18 @@
             [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as stest]
 
+            [taoensso.timbre :as log]
+
             [gpu-device-assigner.context :as context]
-            [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
-
-            [reitit.ring :as ring]
-            [cheshire.core :as json]
-            [ring.util.response :as response]
-            [ring.adapter.jetty :as jetty])
-  (:import java.util.Base64
-           [java.time OffsetDateTime Duration]))
-
-(defn pprint-string [o]
-  (with-out-str (pprint o)))
+            [gpu-device-assigner.util :as util])
+  (:import [java.time OffsetDateTime Duration]))
 
 (defn pthru-label [lbl o]
   (println (str "###### " lbl))
   (pprint o)
   o)
-
-(defn try-json-parse [str]
-  (try
-    (json/parse-string str true)
-    (catch Exception e
-      (throw (ex-info "exception encountered when parsing json string"
-                      {:body str :exception e})))))
-
-(defn try-json-generate [json]
-  (try
-    (json/generate-string json)
-    (catch Exception e
-      (throw (ex-info "exception encountered when generating json string"
-                      {:body str :exception e})))))
 
 ;;;; ==== Lease helpers
 
@@ -53,15 +32,8 @@
 
 (def default-lease-seconds 300)
 
-(defn sanitize-for-dns ^String [^String s]
-  (-> s
-      (str/lower-case)
-      (str/replace #"[^a-z0-9.-]" "-")
-      (str/replace #"^[^a-z0-9]+" "")
-      (str/replace #"[^a-z0-9]+$" "")))
-
 (defn lease-name [gpu-uuid]
-  (sanitize-for-dns (name gpu-uuid)))
+  (util/sanitize-for-dns (name gpu-uuid)))
 
 (defn lease-body
   "Build a Lease object.
@@ -99,7 +71,7 @@
    - POST Lease -> 201 => win
    - 409 => GET; if expired => PATCH renew+holderIdentity => win
    - else lose"
-  [{:keys [k8s-client logger namespace pod] :as ctx} device-uuid pod-uid]
+  [{:keys [k8s-client namespace pod] :as ctx} device-uuid pod-uid]
   (let [pod-ns namespace
         ns   (claims-namespace ctx)
         nm   (lease-name device-uuid)
@@ -110,8 +82,8 @@
       (let [{:keys [status]} (pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
-          (do (log/info logger (format "successfully claimed gpu %s for pod %s"
-                                       device-uuid pod-uid))
+          (do (log/info (format "successfully claimed gpu %s for pod %s"
+                                device-uuid pod-uid))
               true)
 
           (= 409 status)
@@ -120,20 +92,20 @@
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
                                                       {:spec {:holderIdentity pod-uid
                                                               :renewTime (time/now-rfc3339-micro)}})]
-                (log/info logger (format "attempting to claim gpu %s for pod %s"
-                                         device-uuid pod-uid))
+                (log/info (format "attempting to claim gpu %s for pod %s"
+                                  device-uuid pod-uid))
                 (<= 200 status 299))
-              (do (log/warn logger (format "failed to claim gpu %s for pod %s, unexpired lease exists"
-                                           device-uuid pod-uid))
+              (do (log/warn (format "failed to claim gpu %s for pod %s, unexpired lease exists"
+                                    device-uuid pod-uid))
                   false)))
 
           :else
-          (do (log/error logger (format "unexpected error claiming gpu %s for pod %s"
-                                        device-uuid pod-uid))
+          (do (log/error (format "unexpected error claiming gpu %s for pod %s"
+                                 device-uuid pod-uid))
               false)))
       (catch Exception e
-        (log/error logger (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
-        (log/debug logger (with-out-str (print-stack-trace e)))
+        (log/error (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
+        (log/debug (with-out-str (print-stack-trace e)))
         false))))
 
 ;;;; ==== node annotations
@@ -153,33 +125,6 @@
                 (-> node :metadata :annotations)]))
         (k8s/get-nodes k8s-client)))
 
-(defn base64-encode
-  "Encode a string to Base64."
-  [str]
-  (let [encoder (Base64/getEncoder)]
-    (.encodeToString encoder (.getBytes str "UTF-8"))))
-
-(defn base64-decode
-  "Decode a Base64 encoded string."
-  [b64-str]
-  (let [decoder (Base64/getDecoder)]
-    (try
-      (.decode decoder b64-str)
-      (catch Exception e
-        (println (format "failed to decode base64 string: %s: %s"
-                         b64-str (.getMessage e)))
-        (throw e)))))
-
-(defn map-vals
-  "Apply a function to all values in a map."
-  [f m]
-  (into {} (map (fn [[k v]] [k (f v)])) m))
-
-(defn parse-json
-  "Parse a JSON string into a Clojure data structure."
-  [str]
-  (json/parse-string str true))
-
 (defn fudo-ns? [o] (= (namespace o) "fudo.org"))
 
 (s/def ::device-labels
@@ -198,9 +143,9 @@
   [annotations]
   (some->> annotations
            :fudo.org/gpu.device.labels
-           (base64-decode)
+           (util/base64-decode)
            (String.)
-           (parse-json)))
+           (util/try-json-parse)))
 
 (s/fdef get-all-device-labels
   :args ::context/context
@@ -235,25 +180,25 @@
   :args (s/cat :ctx      ::context/context
                :host-uid string?
                :labels   ::device-labels)
-  :ret  (s/keys :req-un [::device-id ::node]))
+  :ret  (s/nilable (s/keys :req-un [::device-id ::node])))
 (defn pick-device
   "Pick the first candidate device whose Lease we can claim atomically.
    Returns {:device-id <uuid> :node <node>} or nil."
-  [{:keys [logger] :as ctx} pod-uid labels]
+  [ctx pod-uid labels]
   (try
     (let [device-labels (get-all-device-labels ctx)]
-      (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
-                             (pprint-string labels)))
-      (log/debug logger (str "\n##########\n#  DEVICES\n##########\n\n"
-                             (pprint-string device-labels)))
+      (log/debug (str "\n##########\n#  REQUESTED\n##########\n\n"
+                      (util/pprint-string labels)))
+      (log/debug (str "\n##########\n#  DEVICES\n##########\n\n"
+                      (util/pprint-string device-labels)))
       (let [matching (find-matching-devices device-labels labels)]
-        (log/debug logger (str "\n##########\n#  MATCHING\n##########\n\n"
-                               (pprint-string matching)))
+        (log/debug (str "\n##########\n#  MATCHING\n##########\n\n"
+                        (util/pprint-string matching)))
         ;; Iterate deterministically or randomly; here we randomize to spread load
         (let [order (shuffle (keys matching))]
           (some (fn [dev-uuid]
                   (when (try-claim-uuid! ctx dev-uuid pod-uid)
-                    (log/info logger (str "\n******\n*** CLAIMED DEVICE %s\n******" dev-uuid))
+                    (log/info (str "\n******\n*** CLAIMED DEVICE %s\n******" dev-uuid))
                     {:device-id dev-uuid
                      :node      (-> matching dev-uuid :node)}))
                 order))))
@@ -265,185 +210,17 @@
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."
-  [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
+  [ctx {:keys [pod namespace requested-labels uid]}]
   ;; Make UID available to pick-device -> try-claim-uuid!
   (if-let [{:keys [device-id node]} (pthru-label "PICKED DEVICE"
                                                  (pick-device (assoc ctx
                                                                      :namespace namespace
                                                                      :pod pod)
                                                               uid requested-labels))]
-    (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
-                                 device-id namespace pod node))
+    (do (log/info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
+                          device-id namespace pod node))
         {:device-id device-id :pod pod :namespace namespace :node node})
-    (do (log/error logger (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                                  namespace pod (str/join "," (map name requested-labels))))
+    (do (log/error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
+                           namespace pod (str/join "," (map name requested-labels))))
         nil)))
 
-(defn json-middleware
-  "Middleware to encode/decode the JSON body of requests/responses."
-  [handler]
-  (fn [req]
-    (if-let [body {:body req}]
-      (-> body
-          :body
-          :body ;; Who knows wtf??
-          (slurp)
-          (try-json-parse)
-          (handler)
-          (try-json-generate)
-          (response/response)
-          (assoc-in [:headers "Content-Type"] "application/json"))
-      (throw (ex-info "missing request body!" {:req req})))))
-
-(defn open-fail-middleware
-  "Middleware to ensure some response is passed to the caller."
-  [{:keys [logger]}]
-  (fn [handler]
-    (fn [req]
-      (try
-        (handler req)
-        (catch Exception e
-          (log/error logger (format "error handling request: %s" (str e)))
-          (log/debug logger (with-out-str (print-stack-trace e)))
-          {:status 500
-           :headers {:Content-Type "application/json"}
-           :body    (json/generate-string {:error (.getMessage e)})})))))
-
-(defn admission-review-response
-  "Create a response for an AdmissionReview request."
-  [& {:keys [uid allowed?
-             status message
-             patch]}]
-  (assert (or status patch) "one of :status or :patch must be specified")
-  {:apiVersion "admission.k8s.io/v1"
-   :kind       "AdmissionReview"
-   :response   (if status
-                 {:uid       uid
-                  :allowed   allowed?
-                  :status    {:code    status
-                              :message message}}
-                 {:uid       uid
-                  :allowed   allowed?
-                  :patchType "JSONPatch"
-                  :patch     patch})})
-
-(defn device-assignment-patch
-  "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs."
-  [{:keys [logger]} device-id node]
-  (let [patch
-        [{:op "add" :path "/metadata/annotations" :value {}}
-         ;; Breadcrumbs for ops / GC tools
-         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.uuid" :value (name device-id)}
-         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.node" :value (name node)}
-         ;; Your CDI assignment (unchanged form)
-         {:op "add" :path "/metadata/annotations/cdi.k8s.io~1gpu-assignment"
-          :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
-         ;; Hard bind to the node that actually has this UUID
-         {:op "add" :path "/spec/nodeName" :value (name node)}]]
-    (log/debug logger (str "\n##########\n#  PATCH\n##########\n\n" (pprint-string patch)))
-    (-> patch
-        (json/generate-string)
-        (base64-encode))))
-
-(defn log-requests-middleware
-  [{:keys [logger]}]
-  (fn [handler]
-    (fn [req]
-      (log/debug logger (str "\n\n##########\n# REQUEST\n##########\n\n" (pprint-string req)))
-      (let [res (handler req)]
-        (log/debug logger (str "\n\n##########\n# RESPONSE\n##########\n\n" (pprint-string res)))
-        res))))
-
-(defn handle-mutation
-  "Handle an AdmissionReview request for mutating a pod's annotations."
-  [{:keys [logger] :as ctx}]
-  (fn [{:keys [kind] :as req}]
-    (when-not (= kind "AdmissionReview")
-      {:apiVersion "admission.k8s.io/v1"
-       :kind       "AdmissionReview"
-       :response   {:uid     (get-in req [:request :uid])
-                    :allowed false
-                    :status  {:code    400
-                              :message (format "Unexpected request kind: %s" kind)}}})
-    (log/debug (:logger ctx) (format "Received AdmissionReview request: %s" (pprint-string req)))
-    (let [dry-run?         (true? (get-in req [:request :dryRun]))
-          fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
-          label-enabled?   (fn [[_ v]] v)
-          gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
-          remove-assign    (fn [[k _]] (not= k :fudo.org/gpu.assign))
-          uid              (get-in req [:request :uid])
-          pod-uid          (get-claim-id req)
-          pod              (or (get-in req [:request :object :metadata :name])
-                               (get-in req [:request :object :metadata :generateName]))
-          namespace        (get-in req [:request :object :metadata :namespace])
-          all-labels       (get-in req [:request :object :metadata :labels])
-          requested-labels (->> all-labels
-                               (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
-                               (keys)
-                               (set))]
-      (if dry-run?
-        (do (log/info logger "dry-run AdmissionReview; skipping Lease allocation")
-            (admission-review-response :uid uid :allowed? true
-                                       :status 200
-                                       :message "dry-run: no mutation"))
-
-        (do (log/info logger (format "processing pod %s/%s, requesting labels [%s]"
-                                     namespace pod (str/join "," (map name requested-labels))))
-            (if-let [assigned-device (assign-device ctx {:pod              pod
-                                                         :uid              pod-uid
-                                                         :namespace        namespace
-                                                         :requested-labels requested-labels})]
-              (let [{:keys [device-id node]} assigned-device]
-                (admission-review-response :uid uid :allowed? true
-                                           :patch (device-assignment-patch ctx device-id node)))
-              (admission-review-response :uid uid :status 429 :allowed? false
-                                         :message (format "no GPUs with requested labels free for pod %s/%s"
-                                                          namespace pod))))))))
-
-(defn app [ctx]
-  (ring/ring-handler
-   (ring/router [["/mutate" {:post (handle-mutation ctx)}]]
-                {:data {:middleware [(log-requests-middleware ctx)
-                                     json-middleware
-                                     (open-fail-middleware ctx)]}})
-   (constantly {:status 404 :body "not found"})))
-
-(defn start-server
-  "Start the web server with the given context and port."
-  [ctx port]
-  (jetty/run-jetty (app ctx)
-                   {:port port
-                    :join? false
-                    :ssl? false
-                    :host "0.0.0.0"}))
-
-;; {
-;;   "apiVersion": "admission.k8s.io/v1",
-;;   "kind": "AdmissionReview",
-;;   "request": {
-;;     "uid": "123abc...",
-;;     "object": {
-;;       "metadata": {
-;;         "name": "mypod",
-;;         "namespace": "default",
-;;         "annotations": {
-;;           "gpu.openai.com/needs": "himem"
-;;         }
-;;       },
-;;       "spec": {
-;;         "nodeName": "gpu-node-1"
-;;       }
-;;     }
-;;   }
-;; }
-
-;; {
-;;   "apiVersion": "admission.k8s.io/v1",
-;;   "kind": "AdmissionReview",
-;;   "response": {
-;;     "uid": "123abc...",
-;;     "allowed": true,
-;;     "patchType": "JSONPatch",
-;;     "patch": "<base64-encoded JSON patch>"
-;;   }
-;; }

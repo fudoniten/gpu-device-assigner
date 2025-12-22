@@ -17,7 +17,7 @@
     (let [mock-base-client (reify k8s/IK8SBaseClient
                              (invoke [_ {:keys [kind action request]}]
                                (case [kind action]
-                                 [:Node :patch/json] {:name (:name request) :patched true})))
+                                 [:Node :patch/strategic] {:name (:name request) :patched true})))
           client (k8s/->K8SClient mock-base-client)]
       (is (= {:name "test-node" :patched true}
              (k8s/patch-node client "test-node" {:op "add" :path "/metadata/labels" :value "new-label"}))))))
