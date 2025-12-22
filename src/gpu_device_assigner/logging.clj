@@ -1,49 +1,37 @@
 (ns gpu-device-assigner.logging
-  (:require [clojure.spec.alpha :as s]))
+  (:require [clojure.spec.alpha :as s]
+            [taoensso.timbre :as timbre]))
 
-(defprotocol Logger
-  "Protocol defining logging operations."
-  (fatal [self msg])
-  (error [self msg])
-  (warn  [self msg])
-  (info  [self msg])
-  (debug [self msg]))
-
-(def LOG-LEVELS [:fatal :error :warn :info :debug])
-(defn log-index
-  "Return the position of `log-level` within `LOG-LEVELS`."
-  [log-level]
-  (.indexOf LOG-LEVELS log-level))
+(defrecord TimbreLogger [min-level])
 
 (defn print-logger
-  "Create a simple logger that prints messages to the console."
+  "Create a Timbre-backed logger that leverages Timbre's built-in level handling."
   [log-level]
-  (let [log-idx (log-index log-level)]
-    (reify Logger
+  (->TimbreLogger log-level))
 
-      (fatal [_ msg]
-        (when (<= (log-index :fatal) log-idx)
-          (println msg)))
+(defn- with-min-level
+  [^TimbreLogger logger f]
+  (timbre/with-merged-config {:min-level (:min-level logger)}
+    (f)))
 
-      (error [_ msg]
-        (when (<= (log-index :error) log-idx)
-          (println msg)))
+(defn fatal [logger msg]
+  (with-min-level logger #(timbre/fatal msg)))
 
-      (warn [_ msg]
-        (when (<= (log-index :warn) log-idx)
-          (println msg)))
+(defn error [logger msg]
+  (with-min-level logger #(timbre/error msg)))
 
-      (info [_ msg]
-        (when (<= (log-index :info) log-idx)
-          (println msg)))
+(defn warn [logger msg]
+  (with-min-level logger #(timbre/warn msg)))
 
-      (debug [_ msg]
-        (when (<= (log-index :debug) log-idx)
-          (println msg))))))
+(defn info [logger msg]
+  (with-min-level logger #(timbre/info msg)))
+
+(defn debug [logger msg]
+  (with-min-level logger #(timbre/debug msg)))
 
 (defn logger?
-  "Check if an object satisfies the Logger protocol."
+  "Check if an object is a Timbre-backed logger."
   [o]
-  (satisfies? Logger o))
+  (instance? TimbreLogger o))
 
 (s/def ::logger logger?)

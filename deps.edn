@@ -10,6 +10,7 @@
         metosin/reitit {:mvn/version "0.9.1"}
 
         ring/ring-jetty-adapter {:mvn/version "1.14.2"}
+        com.taoensso/timbre {:mvn/version "6.3.1"}
         }
  :aliases {
            :run {:main-opts [ "-m" "gpu-device-assigner.cli" ]}
