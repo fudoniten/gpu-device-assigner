@@ -1,6 +1,5 @@
 (ns gpu-device-assigner.cli
-  (:require [clojure.core.async :refer [>!! <!! chan go-loop alt!]]
-            [clojure.tools.cli :as cli]
+  (:require [clojure.tools.cli :as cli]
             [clojure.set :as set]
             [clojure.string :as str]
             [clojure.java.io :as io]
@@ -9,7 +8,7 @@
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.context :as ctx]
             [gpu-device-assigner.logging :as log]
-            [gpu-device-assigner.core :as core]
+            [gpu-device-assigner.http :as http]
             [gpu-device-assigner.lease-renewer :as renewer])
   (:import java.lang.Double)
   (:gen-class))
@@ -98,18 +97,18 @@
                             ::renewer/claims-namespace claims-namespace
                             ::renewer/renew-interval-ms renew-interval
                             ::renewer/jitter renew-jitter)
-            shutdown-chan (chan)]
+            shutdown-signal (promise)]
         (log/debug logger "creating shutdown hook...")
         (.addShutdownHook (Runtime/getRuntime)
                           (Thread. (fn []
                                      (log/info logger "received shutdown request")
-                                     (>!! shutdown-chan true))))
+                                     (deliver shutdown-signal true))))
         (log/info logger "Starting gpu-device-assigner web service...")
         (log/debug logger (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
                                   access-token ca-certificate kubernetes-url port log-level))
-        (let [server (core/start-server ctx port)
+        (let [server (http/start-server ctx port)
               renewer-future (future (renewer/run-renewer! ctx))]
-          (<!! shutdown-chan)
+          @shutdown-signal
           (log/warn logger "Stopping gpu-device-assigner lease renewal service...")
           (future-cancel renewer-future)
           (log/warn logger "Stopping gpu-device-assigner web service...")
