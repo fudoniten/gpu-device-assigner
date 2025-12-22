@@ -34,9 +34,11 @@
         (catch Exception e
           (log/error logger (format "error handling request: %s" (str e)))
           (log/debug logger (with-out-str (print-stack-trace e)))
-          {:status 500
-           :headers {:Content-Type "application/json"}
-           :body    (util/try-json-generate {:error (.getMessage e)})})))))
+          (let [uid (get-in req [:request :uid])]
+            (admission-review-response :uid uid
+                                       :allowed? false
+                                       :status 500
+                                       :message (.getMessage e))))))))
 
 (defn admission-review-response
   "Create a response for an AdmissionReview request."

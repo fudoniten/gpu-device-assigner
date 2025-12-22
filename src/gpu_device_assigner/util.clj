@@ -32,7 +32,7 @@
     (json/generate-string json)
     (catch Exception e
       (throw (ex-info "exception encountered when generating json string"
-                      {:body str :exception e})))))
+                      {:body json :exception e})))))
 
 (defn sanitize-for-dns
   "Convert a string into a DNS-safe, lowercase token."
