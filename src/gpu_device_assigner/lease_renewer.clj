@@ -4,7 +4,7 @@
 
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
-            [taoensso.timbre :as log])
+            [taoensso.telemere :as log])
   (:import java.time.OffsetDateTime))
 
 (s/def ::claims-namespace string?)

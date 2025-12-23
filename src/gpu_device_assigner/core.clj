@@ -9,7 +9,7 @@
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
             [gpu-device-assigner.util :as util]
-            [taoensso.timbre :as log])
+            [taoensso.telemere :as log])
   (:import [java.time OffsetDateTime Duration]))
 
 (defn- unpack-reservations

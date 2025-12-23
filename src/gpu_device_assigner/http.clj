@@ -7,7 +7,7 @@
 
             [gpu-device-assigner.core :as core]
             [gpu-device-assigner.util :as util]
-            [taoensso.timbre :as log]))
+            [taoensso.telemere :as log]))
 
 (defn json-middleware
   "Middleware to encode/decode the JSON body of requests/responses."

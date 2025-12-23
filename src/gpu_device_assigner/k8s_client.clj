@@ -5,7 +5,7 @@
             [clojure.stacktrace :refer [print-stack-trace]]
 
             [kubernetes-api.core :as k8s]
-            [taoensso.timbre :as log])
+            [taoensso.telemere :as log])
   (:import clojure.lang.ExceptionInfo
            java.net.URL
            java.util.Base64))
