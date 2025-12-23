@@ -9,7 +9,7 @@
             [gpu-device-assigner.context :as ctx]
             [gpu-device-assigner.http :as http]
             [gpu-device-assigner.lease-renewer :as renewer]
-            [taoensso.timbre :as log])
+            [taoensso.telemere :as log])
   (:import java.lang.Double)
   (:gen-class))
 

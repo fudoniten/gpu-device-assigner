@@ -2,7 +2,7 @@
   (:require [clojure.pprint :refer [pprint]]
             [clojure.string :as str]
             [cheshire.core :as json]
-            [taoensso.timbre :as log])
+            [taoensso.telemere :as log])
   (:import java.util.Base64))
 
 (defn pprint-string
