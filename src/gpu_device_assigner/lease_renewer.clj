@@ -2,6 +2,7 @@
   (:require [clojure.stacktrace :refer [print-stack-trace]]
             [clojure.spec.alpha :as s]
             [clojure.string :as str]
+            [clojure.pprint :refer [pprint]]
 
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
@@ -38,11 +39,11 @@
     (let [leases (some-> (k8s/list-leases k8s-client claims-namespace)
                          :items)]
       (doseq [lease leases]
+        (log/trace! (format "LEASE: %s" (with-out-str (pprint lease))))
         (let [ln     (get-in lease [:metadata :name])
               pod-ns (or (get-in lease [:metadata :labels :fudo.org/pod.namespace])
                          (get-in lease [:metadata :labels "fudo.org/pod.namespace"]))
               uid    (get-in lease [:spec :holderIdentity])]
-          (log/trace! (format "POD NAMESPACE: %s" pod-ns))
           (cond
             (or (nil? uid) (empty? uid))
             (log! :debug (format "lease %s/%s has no holderIdentity; skipping"
