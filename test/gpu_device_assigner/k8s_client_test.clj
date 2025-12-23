@@ -8,7 +8,7 @@
                              (invoke [_ {:keys [kind action request]}]
                                (case [kind action]
                                  [:Node :get] {:name (:name request) :status "Ready"})))
-          client (k8s/->K8SClient mock-base-client nil)]
+          client (k8s/->K8SClient mock-base-client)]
       (is (= {:name "test-node" :status "Ready"}
              (k8s/get-node client "test-node"))))))
 
@@ -18,7 +18,7 @@
                              (invoke [_ {:keys [kind action request]}]
                                (case [kind action]
                                  [:Node :patch/strategic] {:name (:name request) :patched true})))
-          client (k8s/->K8SClient mock-base-client nil)]
+          client (k8s/->K8SClient mock-base-client)]
       (is (= {:name "test-node" :patched true}
              (k8s/patch-node client "test-node" {:op "add" :path "/metadata/labels" :value "new-label"}))))))
 
@@ -28,7 +28,7 @@
                              (invoke [_ {:keys [kind action request]}]
                                (case [kind action]
                                  [:Pod :get] {:name (:name request) :namespace (:namespace request)})))
-          client (k8s/->K8SClient mock-base-client nil)]
+          client (k8s/->K8SClient mock-base-client)]
       (is (true? (k8s/pod-exists? client "test-pod" "default")))))
 
   (testing "pod-exists? should return false if pod does not exist"
@@ -36,7 +36,7 @@
                              (invoke [_ {:keys [kind action request]}]
                                (case [kind action]
                                  [:Pod :get] (throw (ex-info "Not found" {:type :not-found})))))
-          client (k8s/->K8SClient mock-base-client nil)]
+          client (k8s/->K8SClient mock-base-client)]
       (is (false? (k8s/pod-exists? client "nonexistent-pod" "default"))))))
 
 (t/run-tests 'gpu-device-assigner.k8s-client-test)
