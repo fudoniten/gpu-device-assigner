@@ -20,7 +20,7 @@
                                                     "--log-level" "fatal"]
                                                    #{:access-token :ca-certificate :kubernetes-url :port}
                                                    cli/cli-opts)]
-      (is (nil? errors))
+      (is (empty? errors))
       (is (= :fatal (:log-level options))))))
 
 (deftest parse-opts-rejects-invalid-log-level

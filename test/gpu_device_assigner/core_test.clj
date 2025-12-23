@@ -93,7 +93,7 @@
     (with-redefs [core/try-claim-uuid! (fn [_ _ _] true)]
       (let [ctx {:k8s-client (mock-k8s-client)}
             result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.test}})]
-        (is (= "gpu1" (:device-id result)))
+        (is (= :gpu1 (:device-id result)))
         (is (= "node1" (:node result))))))
 
   (testing "Succeed if a matching device is found, and is reserved but by a pod that no longer exists"
