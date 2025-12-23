@@ -22,63 +22,45 @@
     (is (= {:key "value"} (util/parse-json "{\"key\": \"value\"}")))))
 
 (deftest test-handle-mutation
-  (let [mock-k8s-client (fn [& {:keys [gpu-label-map gpu-reservations]
-                               :or   {gpu-label-map {:gpu1 #{:fudo.org/gpu.test}}
-                                      gpu-reservations {:gpu1 {:pod "other-pod" :namespace "default"}}}}]
-                          (k8s/->K8SClient
-                           (reify k8s/IK8SBaseClient
-                             (invoke [_ {:keys [kind action request]}]
-                               (let [node {:metadata {:name "node1"
-                                                      :annotations {:fudo.org/gpu.device.labels
-                                                                    (util/base64-encode (util/try-json-generate gpu-label-map))
-                                                                    :fudo.org/gpu.device.reservations
-                                                                    (util/base64-encode (util/try-json-generate gpu-reservations))}}}]
-                                 (case [kind action]
-                                   [:Node :list] {:items [node]}
-                                   [:Node :get]  node
-                                   [:Pod :get] (if (= "other-pod" (:name request))
-                                                 {:name (:name request) :namespace (:namespace request)}
-                                                 (throw (ex-info "Not found" {:type :not-found})))
-                                   [:Node :patch/json] true))))))]
-    (testing "Handle valid mutation request"
-      (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1"})]
-        (let [handle-mutation-fn (http/handle-mutation {})
-              request {:kind "AdmissionReview"
-                       :request {:uid "123abc"
-                                 :object {:metadata {:generateName "test-pod"
-                                                     :namespace "default"
-                                                     :labels {:fudo.org/gpu.test "true"}}}}}
-              response (handle-mutation-fn request)
-              patch-body (-> response :response :patch util/base64-decode String. util/try-json-parse)]
-          (is (= "AdmissionReview" (:kind response)))
-          (is (= "123abc" (get-in response [:response :uid])))
-          (is (= true (get-in response [:response :allowed])))
-          (is (= "JSONPatch" (get-in response [:response :patchType])))
-          (is (= "gpu1" (get-in (nth patch-body 1) [:value])))
-          (is (= "/metadata/annotations/fudo.org~1gpu.uuid" (get-in (nth patch-body 1) [:path]))))))
-
-    (testing "Handle request with unexpected kind"
+  (testing "Handle valid mutation request"
+    (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1"})]
       (let [handle-mutation-fn (http/handle-mutation {})
-            request {:kind "UnexpectedKind"
-                     :request {:uid "123abc"}}
+            request {:kind "AdmissionReview"
+                     :request {:uid "123abc"
+                               :object {:metadata {:generateName "test-pod"
+                                                   :namespace "default"
+                                                   :labels {:fudo.org/gpu.test "true"}}}}}
+            response (handle-mutation-fn request)
+            patch-body (-> response :response :patch util/base64-decode String. util/try-json-parse)]
+        (is (= "AdmissionReview" (:kind response)))
+        (is (= "123abc" (get-in response [:response :uid])))
+        (is (= true (get-in response [:response :allowed])))
+        (is (= "JSONPatch" (get-in response [:response :patchType])))
+        (is (= "gpu1" (get-in (nth patch-body 1) [:value])))
+        (is (= "/metadata/annotations/fudo.org~1gpu.uuid" (get-in (nth patch-body 1) [:path]))))))
+
+  (testing "Handle request with unexpected kind"
+    (let [handle-mutation-fn (http/handle-mutation {})
+          request {:kind "UnexpectedKind"
+                   :request {:uid "123abc"}}
+          response (handle-mutation-fn request)]
+      (is (= "AdmissionReview" (:kind response)))
+      (is (= "123abc" (get-in response [:response :uid])))
+      (is (= false (get-in response [:response :allowed])))))
+
+  (testing "Handle request where no device can be assigned"
+    (with-redefs [core/assign-device (constantly nil)]
+      (let [handle-mutation-fn (http/handle-mutation {})
+            request {:kind "AdmissionReview"
+                     :request {:uid "123abc"
+                               :object {:metadata {:name "test-pod"
+                                                   :namespace "default"
+                                                   :labels {:fudo.org/gpu.test "true"}},
+                                        :spec {:nodeName "node1"}}}}
             response (handle-mutation-fn request)]
         (is (= "AdmissionReview" (:kind response)))
         (is (= "123abc" (get-in response [:response :uid])))
-        (is (= false (get-in response [:response :allowed])))))
-
-    (testing "Handle request where no device can be assigned"
-      (with-redefs [core/assign-device (constantly nil)]
-        (let [handle-mutation-fn (http/handle-mutation {})
-              request {:kind "AdmissionReview"
-                       :request {:uid "123abc"
-                                 :object {:metadata {:name "test-pod"
-                                                     :namespace "default"
-                                                     :labels {:fudo.org/gpu.test "true"}},
-                                          :spec {:nodeName "node1"}}}}
-              response (handle-mutation-fn request)]
-          (is (= "AdmissionReview" (:kind response)))
-          (is (= "123abc" (get-in response [:response :uid])))
-          (is (= false (get-in response [:response :allowed]))))))))
+        (is (= false (get-in response [:response :allowed])))))))
 (let [mock-k8s-client (fn [& {:keys [gpu-label-map gpu-reservations]
                              :or   {gpu-label-map {:gpu1 #{:fudo.org/gpu.test}}
                                     gpu-reservations {}}}]
@@ -89,8 +71,7 @@
                                                       :annotations {:fudo.org/gpu.device.labels
                                                                     (util/base64-encode (util/try-json-generate gpu-label-map))
                                                                     :fudo.org/gpu.device.reservations
-                                                                    (util/base64-encode (util/try-json-generate gpu-reservations))
-}}}]
+                                                                    (util/base64-encode (util/try-json-generate gpu-reservations))}}}]
                                (case [kind action]
                                  [:Node :list] {:items [node]}
                                  [:Node :get]  node))))))]
@@ -121,10 +102,10 @@
                                (invoke [_ {:keys [kind action]}]
                                  (case [kind action]
                                    [:Node :list] {:items [{:metadata {:name "node1"
-                                                                     :annotations {:fudo.org/gpu.device.labels
-                                                                                   (util/base64-encode (util/try-json-generate {"gpu1" #{"label1"}}))
-                                                                                   :fudo.org/gpu.device.reservations
-                                                                                   (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}}))}}]}
+                                                                      :annotations {:fudo.org/gpu.device.labels
+                                                                                    (util/base64-encode (util/try-json-generate {"gpu1" #{"label1"}}))
+                                                                                    :fudo.org/gpu.device.reservations
+                                                                                    (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}})}}}]}
                                    [:Pod :get] (throw (ex-info "Not found" {:type :not-found}))
                                    [:Node :patch/json] true))))}
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
