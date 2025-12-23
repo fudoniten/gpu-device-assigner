@@ -65,11 +65,11 @@
                 (log! :debug (format "holder pod uid=%s not found; not renewing %s/%s"
                                      uid claims-namespace ln)))
               (catch Exception e
-                (log/error! (format "error processing lease %s/%s: %s"
-                                    claims-namespace ln (.getMessage e)))
+                (log/error! e (format "error processing lease %s/%s: %s"
+                                      claims-namespace ln (.getMessage e)))
                 (log! :debug (with-out-str (print-stack-trace e)))))))))
     (catch Exception e
-      (log/error! (str "renew pass failed: " (.getMessage e)))
+      (log/error! e (str "renew pass failed: " (.getMessage e)))
       (log! :debug (with-out-str (print-stack-trace e))))))
 
 (defn run-renewer!
