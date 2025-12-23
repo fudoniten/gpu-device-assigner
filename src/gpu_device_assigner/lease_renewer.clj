@@ -42,6 +42,7 @@
               pod-ns (or (get-in lease [:metadata :labels :fudo.org/pod.namespace])
                          (get-in lease [:metadata :labels "fudo.org/pod.namespace"]))
               uid    (get-in lease [:spec :holderIdentity])]
+          (log/trace! (format "POD NAMESPACE: %s" pod-ns))
           (cond
             (or (nil? uid) (empty? uid))
             (log! :debug (format "lease %s/%s has no holderIdentity; skipping"
