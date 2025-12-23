@@ -207,8 +207,9 @@
                      :node      (-> matching dev-uuid :node)}))
                 order))))
     (catch Exception e
-      (throw (ex-info "Failed to pick device via Lease"
-                      {:labels labels :exception e})))))
+      (log/error e "Failed to pick device via Lease")
+      (log/debug (with-out-str (print-stack-trace e)))
+      nil)))
 
 (stest/instrument 'pick-device)
 
