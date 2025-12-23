@@ -98,6 +98,15 @@
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.other}})]
       (is (nil? result))))
 
+  (testing "Return nil when leasing fails to claim a device"
+    (with-redefs [core/get-all-device-labels (fn [_]
+                                              {:gpu1 {:node "node1" :labels #{:fudo.org/gpu.test}}})
+                  core/try-claim-uuid! (fn [_ _ _]
+                                        (throw (ex-info "lease failed" {})))]
+      (is (nil? (core/pick-device {:k8s-client (mock-k8s-client)}
+                                  "pod-uid"
+                                  #{:fudo.org/gpu.test})))))
+
   (testing "Succeed when a matching device can be claimed"
     (with-redefs [core/try-claim-uuid! (fn [_ _ _] true)]
       (let [ctx {:k8s-client (mock-k8s-client)}
