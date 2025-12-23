@@ -27,6 +27,13 @@
 
 (def default-lease-seconds 300)
 
+(defn format-labels
+  "Comma-separated label names for logging." 
+  [labels]
+  (if (seq labels)
+    (str/join ", " (map name labels))
+    "none"))
+
 (defn lease-name
   "Format a Kubernetes Lease name from a GPU UUID."
   [gpu-uuid]
@@ -173,12 +180,16 @@
 (defn find-matching-devices
   "Filter devices whose labels satisfy the requested label set."
   [device-labels req-labels]
-  (util/pthru-label "MATCHING DEVICES"
-               (into {}
-                     (filter
-                      (fn [[_ {device-labels :labels}]]
-                        (subset? (util/pthru-label "REQ" req-labels) (util/pthru-label "AVAIL" device-labels))))
-                     device-labels)))
+  (log/debugf "evaluating %s devices against requested labels %s"
+              (count device-labels)
+              (pr-str req-labels))
+  (let [matching (into {}
+                       (filter
+                        (fn [[_ {device-labels :labels}]]
+                          (subset? req-labels device-labels)))
+                       device-labels))
+    (log/debugf "matching devices: %s" (pr-str matching))
+    matching))
 
 (s/fdef pick-device
   :args (s/cat :ctx      ::context/context
@@ -190,22 +201,27 @@
    Returns {:device-id <uuid> :node <node>} or nil."
   [ctx pod-uid labels]
   (try
-    (let [device-labels (get-all-device-labels ctx)]
-      (log/debug (str "\n##########\n#  REQUESTED\n##########\n\n"
-                      (util/pprint-string labels)))
-      (log/debug (str "\n##########\n#  DEVICES\n##########\n\n"
-                      (util/pprint-string device-labels)))
-      (let [matching (find-matching-devices device-labels labels)]
-        (log/debug (str "\n##########\n#  MATCHING\n##########\n\n"
-                        (util/pprint-string matching)))
-        ;; Iterate deterministically or randomly; here we randomize to spread load
-        (let [order (shuffle (keys matching))]
-          (some (fn [dev-uuid]
-                  (when (try-claim-uuid! ctx dev-uuid pod-uid)
-                    (log/info (str "\n******\n*** CLAIMED DEVICE %s\n******" dev-uuid))
-                    {:device-id dev-uuid
-                     :node      (-> matching dev-uuid :node)}))
-                order))))
+    (let [device-labels (get-all-device-labels ctx)
+          pod-name      (str (:namespace ctx) "/" (:pod ctx))
+          available     (->> device-labels vals (mapcat :labels) set)]
+      (log/infof "requested tags for pod %s: %s" pod-name (format-labels labels))
+      (log/infof "available tags: %s" (format-labels available))
+      (log/debugf "device label map: %s" (util/pprint-string device-labels))
+      (let [matching (find-matching-devices device-labels labels)
+            ;; Iterate deterministically or randomly; here we randomize to spread load
+            result   (let [order (shuffle (keys matching))]
+                       (some (fn [dev-uuid]
+                               (when (try-claim-uuid! ctx dev-uuid pod-uid)
+                                 (log/infof "claimed device %s for pod %s on node %s"
+                                            dev-uuid pod-name (-> matching dev-uuid :node))
+                                 {:device-id dev-uuid
+                                  :node      (-> matching dev-uuid :node)}))
+                             order))]
+        (when (empty? matching)
+          (log/infof "no matching devices available for pod %s" pod-name))
+        (when (empty? device-labels)
+          (log/infof "no devices discovered when scheduling pod %s" pod-name))
+        result))
     (catch Exception e
       (log/error e "Failed to pick device via Lease")
       (log/debug (with-out-str (print-stack-trace e)))
@@ -226,6 +242,6 @@
                           device-id namespace pod node))
         {:device-id device-id :pod pod :namespace namespace :node node})
     (do (log/error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                           namespace pod (str/join "," (map name requested-labels))))
+                           namespace pod (format-labels requested-labels)))
         nil)))
 
