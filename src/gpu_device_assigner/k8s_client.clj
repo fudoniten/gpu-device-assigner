@@ -39,6 +39,8 @@
   (get-nodes          [self])
   (patch-node         [self node-name patch])
 
+  (patch-node-json    [self node-name patch])
+
   (create-lease       [self namespace name lease-body])
   (get-lease          [self namespace name])
   (patch-lease        [self namespace name merge-path])
@@ -82,6 +84,13 @@
       (invoke client
               {:kind    :Node
                :action  :patch/strategic
+               :request {:name node-name
+                         :body patch}}))
+
+    (patch-node-json [_ node-name patch]
+      (invoke client
+              {:kind    :Node
+               :action  :patch/json
                :request {:name node-name
                          :body patch}}))
 
