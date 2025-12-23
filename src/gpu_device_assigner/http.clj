@@ -71,7 +71,7 @@
           :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
          ;; Hard bind to the node that actually has this UUID
          {:op "add" :path "/spec/nodeName" :value (name node)}]]
-    (log! :debug (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
+    (log/trace! (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
     (-> patch
         (util/try-json-generate)
         (util/base64-encode))))
@@ -80,9 +80,9 @@
   [_]
   (fn [handler]
     (fn [req]
-      (log! :debug (str "\n\n##########\n# REQUEST\n##########\n\n" (util/pprint-string req)))
+      (log/trace! (str "\n\n##########\n# REQUEST\n##########\n\n" (util/pprint-string req)))
       (let [res (handler req)]
-        (log! :debug (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
+        (log/trace! (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
         res))))
 
 (defn handle-mutation
@@ -119,7 +119,7 @@
                                        :message "dry-run: no mutation"))
 
         (do (log! :info (format "processing pod %s/%s, requesting labels [%s]"
-                              namespace pod (str/join "," (map name requested-labels))))
+                                namespace pod (str/join "," (map name requested-labels))))
             (if-let [assigned-device (core/assign-device ctx {:pod              pod
                                                               :uid              pod-uid
                                                               :namespace        namespace

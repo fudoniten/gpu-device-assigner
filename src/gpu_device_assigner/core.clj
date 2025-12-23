@@ -4,7 +4,6 @@
             [clojure.set :refer [subset?]]
             [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as stest]
-
             [gpu-device-assigner.context :as context]
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
@@ -187,9 +186,10 @@
 (defn find-matching-devices
   "Filter devices whose labels satisfy the requested label set."
   [device-labels req-labels]
-  (log! :debug (format "evaluating %s devices against requested labels %s"
-                       (count device-labels)
-                       (pr-str req-labels)))
+  (log! :debug
+        (format "evaluating %s devices against requested labels %s"
+                (count device-labels)
+                (pr-str req-labels)))
   (let [matching (into {}
                        (filter
                         (fn [[_ {device-labels :labels}]]
@@ -224,8 +224,9 @@
                            (some (fn [dev-uuid]
                                    (try
                                      (when (try-claim-uuid! ctx dev-uuid pod-uid)
-                                       (log! :info (format"claimed device %s for pod %s on node %s"
-                                                          dev-uuid pod-name (-> matching dev-uuid :node)))
+                                       (log! :info
+                                             (format "claimed device %s for pod %s on node %s"
+                                                     dev-uuid pod-name (-> matching dev-uuid :node)))
                                        {:device-id dev-uuid
                                         :node      (-> matching dev-uuid :node)})
                                      (catch Throwable e

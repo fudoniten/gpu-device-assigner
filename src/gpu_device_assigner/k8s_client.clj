@@ -212,7 +212,7 @@
   (try
     (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data]))))
     (catch Exception e
-      (log! :fatal (str "failed to create k8s-client: " (.getMessage e)))
+      (log/error! (str "failed to create k8s-client: " (.getMessage e)))
       (throw (ex-info "failed to create k8s-client" {:error e})))))
 
 (stest/instrument 'create)

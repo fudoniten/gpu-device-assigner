@@ -82,7 +82,7 @@
                    (let [d (long (* ms jt)) r (rand-int (inc (* 2 d)))]
                      (- (+ ms r) d)))]
     (log! :info (format "lease-renewer scanning leases every ~%dms (±%.0f%%)"
-                      interval (* jt 100.0)))
+                        interval (* jt 100.0)))
     (while true
       (renew-leases-once! ctx)
       (sleep! (jittered interval)))))

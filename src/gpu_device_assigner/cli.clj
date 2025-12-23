@@ -107,9 +107,9 @@
         (let [server (http/start-server ctx port)
               renewer-future (future (renewer/run-renewer! ctx))]
           @shutdown-signal
-          (log! :warn "Stopping gpu-device-assigner lease renewal service...")
+          (log! :info "Stopping gpu-device-assigner lease renewal service...")
           (future-cancel renewer-future)
-          (log! :warn "Stopping gpu-device-assigner web service...")
+          (log! :info "Stopping gpu-device-assigner web service...")
           (.stop server)))
       (catch Exception e
         (log/error! (format "error in main: %s" (.getMessage e)))
