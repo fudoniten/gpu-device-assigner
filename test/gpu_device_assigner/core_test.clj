@@ -115,7 +115,7 @@
                                                                             :fudo.org/gpu.device.reservations
                                                                             (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}})}}}]
                                    [:Pod :get] (throw (ex-info "Not found" {:type :not-found}))
-                                   [:Node :patch/json] true))}))}
+                                   [:Node :patch/json] true))))}
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
       (is (= "gpu1" result)))))
 
