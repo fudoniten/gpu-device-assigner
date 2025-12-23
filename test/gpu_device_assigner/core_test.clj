@@ -85,7 +85,7 @@
                                  :object {:metadata {:name "test-pod"
                                                      :namespace "default"
                                                      :labels {:fudo.org/gpu.test "true"}},
-                                          :spec {:nodeName "node1"}}}}}
+                                          :spec {:nodeName "node1"}}}}
               response (handle-mutation-fn request)]
           (is (= "AdmissionReview" (:kind response)))
           (is (= "123abc" (get-in response [:response :uid])))
