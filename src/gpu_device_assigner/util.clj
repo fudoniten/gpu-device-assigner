@@ -1,7 +1,8 @@
 (ns gpu-device-assigner.util
   (:require [clojure.pprint :refer [pprint]]
             [clojure.string :as str]
-            [cheshire.core :as json])
+            [cheshire.core :as json]
+            [taoensso.timbre :as log])
   (:import java.util.Base64))
 
 (defn pprint-string
@@ -12,8 +13,7 @@
 (defn pthru-label
   "Log a labeled value and return it unchanged."
   [lbl o]
-  (println (str "###### " lbl))
-  (pprint o)
+  (log/debugf "%s: %s" lbl (pr-str o))
   o)
 
 (defn try-json-parse
