@@ -5,8 +5,6 @@
             [gpu-device-assigner.core-test :as core-test]
             [gpu-device-assigner.k8s-client-test :as k8s-client-test]))
 
-(log/merge-config! {:min-level :fatal})
-
 (defn -main
   "Run the full GPU device assigner test suite."
   [& _]

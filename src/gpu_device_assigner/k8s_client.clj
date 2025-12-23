@@ -5,7 +5,7 @@
             [clojure.stacktrace :refer [print-stack-trace]]
 
             [kubernetes-api.core :as k8s]
-            [taoensso.telemere :as log])
+            [taoensso.telemere :as log :refer [log!]])
   (:import clojure.lang.ExceptionInfo
            java.net.URL
            java.util.Base64))
@@ -38,8 +38,6 @@
   (get-node           [self node-name])
   (get-nodes          [self])
   (patch-node         [self node-name patch])
-
-  (patch-node-json    [self node-name patch])
 
   (create-lease       [self namespace name lease-body])
   (get-lease          [self namespace name])
@@ -84,13 +82,6 @@
       (invoke client
               {:kind    :Node
                :action  :patch/strategic
-               :request {:name node-name
-                         :body patch}}))
-
-    (patch-node-json [_ node-name patch]
-      (invoke client
-              {:kind    :Node
-               :action  :patch/json
                :request {:name node-name
                          :body patch}}))
 
@@ -221,7 +212,7 @@
   (try
     (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data]))))
     (catch Exception e
-      (log/fatal (str "failed to create k8s-client: " (.getMessage e)))
+      (log! :fatal (str "failed to create k8s-client: " (.getMessage e)))
       (throw (ex-info "failed to create k8s-client" {:error e})))))
 
 (stest/instrument 'create)

@@ -7,7 +7,7 @@
 
             [gpu-device-assigner.core :as core]
             [gpu-device-assigner.util :as util]
-            [taoensso.telemere :as log]))
+            [taoensso.telemere :as log :refer [log!]]))
 
 (defn json-middleware
   "Middleware to encode/decode the JSON body of requests/responses."
@@ -50,8 +50,8 @@
       (try
         (handler req)
         (catch Exception e
-          (log/error (format "error handling request: %s" (str e)))
-          (log/debug (with-out-str (print-stack-trace e)))
+          (log/error! (format "error handling request: %s" (str e)))
+          (log! :debug (with-out-str (print-stack-trace e)))
           (let [uid (get-in req [:request :uid])]
             (admission-review-response :uid uid
                                        :allowed? false
@@ -71,7 +71,7 @@
           :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
          ;; Hard bind to the node that actually has this UUID
          {:op "add" :path "/spec/nodeName" :value (name node)}]]
-    (log/debug (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
+    (log! :debug (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
     (-> patch
         (util/try-json-generate)
         (util/base64-encode))))
@@ -80,9 +80,9 @@
   [_]
   (fn [handler]
     (fn [req]
-      (log/debug (str "\n\n##########\n# REQUEST\n##########\n\n" (util/pprint-string req)))
+      (log! :debug (str "\n\n##########\n# REQUEST\n##########\n\n" (util/pprint-string req)))
       (let [res (handler req)]
-        (log/debug (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
+        (log! :debug (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
         res))))
 
 (defn handle-mutation
@@ -96,7 +96,7 @@
                     :allowed false
                     :status  {:code    400
                               :message (format "Unexpected request kind: %s" kind)}}})
-    (log/debug (format "Received AdmissionReview request: %s" (util/pprint-string req)))
+    (log! :debug (format "Received AdmissionReview request: %s" (util/pprint-string req)))
     (let [dry-run?         (true? (get-in req [:request :dryRun]))
           fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
           label-enabled?   (fn [[_ v]] v)
@@ -113,12 +113,12 @@
                                (keys)
                                (set))]
       (if dry-run?
-        (do (log/info "dry-run AdmissionReview; skipping Lease allocation")
+        (do (log! :info "dry-run AdmissionReview; skipping Lease allocation")
             (admission-review-response :uid uid :allowed? true
                                        :status 200
                                        :message "dry-run: no mutation"))
 
-        (do (log/info (format "processing pod %s/%s, requesting labels [%s]"
+        (do (log! :info (format "processing pod %s/%s, requesting labels [%s]"
                               namespace pod (str/join "," (map name requested-labels))))
             (if-let [assigned-device (core/assign-device ctx {:pod              pod
                                                               :uid              pod-uid

@@ -9,7 +9,7 @@
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
             [gpu-device-assigner.util :as util]
-            [taoensso.telemere :as log])
+            [taoensso.telemere :as log :refer [log!]])
   (:import [java.time OffsetDateTime Duration]))
 
 ;;;; ==== Lease helpers
@@ -86,8 +86,8 @@
       (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
-          (do (log/info (format "successfully claimed gpu %s for pod %s"
-                                device-uuid pod-uid))
+          (do (log! :info (format "successfully claimed gpu %s for pod %s"
+                                  device-uuid pod-uid))
               true)
 
           (= 409 status)
@@ -103,20 +103,20 @@
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
                                                       {:spec {:holderIdentity pod-uid
                                                               :renewTime (time/now-rfc3339-micro)}})]
-                (log/info (format "attempting to claim gpu %s for pod %s"
-                                  device-uuid pod-uid))
-                (<= 200 status 299))
-              (do (log/warn (format "failed to claim gpu %s for pod %s, unexpired lease exists"
+                (log! :info (format "attempting to claim gpu %s for pod %s"
                                     device-uuid pod-uid))
+                (<= 200 status 299))
+              (do (log! :info (format "failed to claim gpu %s for pod %s, unexpired lease exists"
+                                      device-uuid pod-uid))
                   false)))
 
           :else
-          (do (log/error (format "unexpected error claiming gpu %s for pod %s"
-                                 device-uuid pod-uid))
+          (do (log/error! (format "unexpected error claiming gpu %s for pod %s"
+                                  device-uuid pod-uid))
               false)))
       (catch Throwable e
-        (log/error (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
-        (log/debug (with-out-str (print-stack-trace e)))
+        (log/error! (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
+        (log! :debug (with-out-str (print-stack-trace e)))
         false))))
 
 ;;;; ==== node annotations
@@ -187,15 +187,15 @@
 (defn find-matching-devices
   "Filter devices whose labels satisfy the requested label set."
   [device-labels req-labels]
-  (log/debugf "evaluating %s devices against requested labels %s"
-              (count device-labels)
-              (pr-str req-labels))
+  (log! :debug (format "evaluating %s devices against requested labels %s"
+                       (count device-labels)
+                       (pr-str req-labels)))
   (let [matching (into {}
                        (filter
                         (fn [[_ {device-labels :labels}]]
                           (subset? req-labels device-labels)))
                        device-labels)]
-    (log/debugf "matching devices: %s" (pr-str matching))
+    (log! :debug (format "matching devices: %s" (pr-str matching)))
     matching))
 
 (s/fdef pick-device
@@ -211,40 +211,40 @@
     (let [device-labels (get-all-device-labels ctx)
           pod-name      (str (:namespace ctx) "/" (:pod ctx))
           available     (->> device-labels vals (mapcat :labels) set)]
-      (log/infof "requested tags for pod %s: %s" pod-name (format-labels labels))
-      (log/infof "available tags: %s" (format-labels available))
-      (log/debugf "device label map: %s" (util/pprint-string device-labels))
+      (log! :info (format "requested tags for pod %s: %s" pod-name (format-labels labels)))
+      (log! :info (format "available tags: %s" (format-labels available)))
+      (log! :debug (format "device label map: %s" (util/pprint-string device-labels)))
       (if (empty? device-labels)
-        (log/infof "no devices discovered when scheduling pod %s" pod-name)
+        (log! :info (format "no devices discovered when scheduling pod %s" pod-name))
         (let [matching (find-matching-devices device-labels labels)]
           (if (empty? matching)
-            (log/infof "no matching devices available for pod %s" pod-name)
+            (log! :info (format "no matching devices available for pod %s" pod-name))
             ;; Iterate deterministically or randomly; here we randomize to spread load
             (let [result (when-let [order (shuffle (keys matching))]
                            (some (fn [dev-uuid]
                                    (try
                                      (when (try-claim-uuid! ctx dev-uuid pod-uid)
-                                       (log/infof "claimed device %s for pod %s on node %s"
-                                                  dev-uuid pod-name (-> matching dev-uuid :node))
+                                       (log! :info (format"claimed device %s for pod %s on node %s"
+                                                          dev-uuid pod-name (-> matching dev-uuid :node)))
                                        {:device-id dev-uuid
                                         :node      (-> matching dev-uuid :node)})
                                      (catch Throwable e
-                                       (log/error e (format "Failed to claim device %s for pod %s"
-                                                            dev-uuid pod-name))
-                                       (log/debug (with-out-str (print-stack-trace e)))
+                                       (log/error! e (format "Failed to claim device %s for pod %s"
+                                                             dev-uuid pod-name))
+                                       (log! :debug (with-out-str (print-stack-trace e)))
                                        nil)))
                                  order))]
               result)))))
     (catch Throwable e
-      (log/error e "Failed to pick device via Lease")
-      (log/debug (with-out-str (print-stack-trace e)))
+      (log/error! e "Failed to pick device via Lease")
+      (log! :debug (with-out-str (print-stack-trace e)))
       nil)))
 
 (stest/instrument 'pick-device)
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."
-  [ctx {:keys [pod namespace requested-labels uid node]}]
+  [ctx {:keys [pod namespace requested-labels uid]}]
   (let [requested-labels (set (map keyword requested-labels))]
     ;; Make UID available to pick-device -> try-claim-uuid!
     (if-let [{:keys [device-id node]} (util/pthru-label "PICKED DEVICE"
@@ -252,10 +252,10 @@
                                                                             :namespace namespace
                                                                             :pod pod)
                                                                      uid requested-labels))]
-      (do (log/info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
+      (when device-id
+        (log! :info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
                             device-id namespace pod node))
-          {:device-id device-id :pod pod :namespace namespace :node node})
-      (do (log/error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                             namespace pod (format-labels requested-labels)))
+        {:device-id device-id :pod pod :namespace namespace :node node})
+      (do (log/error! (format "no free device (by Lease) for pod %s/%s, labels [%s]"
+                              namespace pod (format-labels requested-labels)))
           nil))))
-

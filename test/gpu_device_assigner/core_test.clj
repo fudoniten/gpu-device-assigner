@@ -107,7 +107,7 @@
                         :renewTime (gtime/now-rfc3339-micro)}}
           ctx   {:k8s-client (k8s/->K8SClient
                               (reify k8s/IK8SBaseClient
-                                (invoke [_ {:keys [kind action request]}]
+                                (invoke [_ {:keys [kind action]}]
                                   (case [kind action]
                                     [:Node :list] {:items [{:metadata {:name "node1"
                                                                        :annotations {:fudo.org/gpu.device.labels
@@ -115,7 +115,7 @@
                                     [:Lease :create] {:status 409}
                                     [:Lease :get] {:body lease}
                                     [:Lease :patch/json-merge] {:status 200}
-                                    [:Pod :list] {:items []})))}}
+                                    [:Pod :list] {:items []}))))}
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"} :uid "pod-uid"})]
       (is (= :gpu1 (:device-id result)))
       (is (= "node1" (:node result))))))

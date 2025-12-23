@@ -9,7 +9,7 @@
             [gpu-device-assigner.context :as ctx]
             [gpu-device-assigner.http :as http]
             [gpu-device-assigner.lease-renewer :as renewer]
-            [taoensso.telemere :as log])
+            [taoensso.telemere :as log :refer [log!]])
   (:import java.lang.Double)
   (:gen-class))
 
@@ -86,7 +86,6 @@
                     claims-namespace
                     renew-interval
                     renew-jitter]} options
-            _ (log/merge-config! {:min-level log-level})
             client (k8s/create :url kubernetes-url
                                :timeout 120000 ; Set timeout to 120 seconds
                                :certificate-authority-data (k8s/load-certificate ca-certificate)
@@ -96,23 +95,23 @@
                             ::renewer/renew-interval-ms renew-interval
                             ::renewer/jitter renew-jitter)
             shutdown-signal (promise)]
-        (log/info "starting gpu-device-assigner...")
-        (log/debug "creating shutdown hook...")
+        (log! :info "starting gpu-device-assigner...")
+        (log! :debug "creating shutdown hook...")
         (.addShutdownHook (Runtime/getRuntime)
                           (Thread. (fn []
-                                     (log/info "received shutdown request")
+                                     (log! :info "received shutdown request")
                                      (deliver shutdown-signal true))))
-        (log/info "Starting gpu-device-assigner web service...")
-        (log/debug (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
+        (log! :info "Starting gpu-device-assigner web service...")
+        (log! :debug (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
                            access-token ca-certificate kubernetes-url port log-level))
         (let [server (http/start-server ctx port)
               renewer-future (future (renewer/run-renewer! ctx))]
           @shutdown-signal
-          (log/warn "Stopping gpu-device-assigner lease renewal service...")
+          (log! :warn "Stopping gpu-device-assigner lease renewal service...")
           (future-cancel renewer-future)
-          (log/warn "Stopping gpu-device-assigner web service...")
+          (log! :warn "Stopping gpu-device-assigner web service...")
           (.stop server)))
       (catch Exception e
-        (log/error (format "error in main: %s" (.getMessage e)))
-        (log/debug (print-stack-trace e))))
+        (log/error! (format "error in main: %s" (.getMessage e)))
+        (log! :debug (print-stack-trace e))))
     (msg-quit 0 "stopping gpu-device-assigner...")))
