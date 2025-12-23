@@ -1,6 +1,7 @@
 (ns gpu-device-assigner.lease-renewer
   (:require [clojure.stacktrace :refer [print-stack-trace]]
             [clojure.spec.alpha :as s]
+            [clojure.string :as str]
 
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
@@ -44,6 +45,10 @@
           (cond
             (or (nil? uid) (empty? uid))
             (log! :debug (format "lease %s/%s has no holderIdentity; skipping"
+                                 claims-namespace ln))
+
+            (str/blank? pod-ns)
+            (log! :debug (format "lease %s/%s missing pod namespace label; skipping"
                                  claims-namespace ln))
 
             :else
