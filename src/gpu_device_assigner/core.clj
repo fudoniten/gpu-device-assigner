@@ -79,8 +79,8 @@
         ns   (claims-namespace ctx)
         nm   (lease-name device-uuid)
         body (lease-body device-uuid pod-uid
-                         {"fudo.org/pod.namespace" pod-ns
-                          "fudo.org/pod.name" pod})]
+                         {:extra-labels {"fudo.org/pod.namespace" pod-ns
+                                         "fudo.org/pod.name" pod}})]
     (try
       (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
         (cond

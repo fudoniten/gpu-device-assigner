@@ -90,6 +90,24 @@
                                   "pod-uid"
                                   #{:fudo.org/gpu.test})))))
 
+  (testing "Create leases with pod namespace labels"
+    (let [captured-request (atom nil)
+          client (k8s/->K8SClient
+                  (reify k8s/IK8SBaseClient
+                    (invoke [_ {:keys [kind action request]}]
+                      (case [kind action]
+                        [:Lease :create] (do (reset! captured-request request)
+                                             {:status 201})
+                        [:Node :list] {:items []}
+                        [:Pod :list] {:items []}
+                        [:Lease :patch/json-merge] {:status 200}
+                        [:Lease :get] {:body {}}))))
+          ctx {:k8s-client client :namespace "default" :pod "test-pod"}]
+      (core/try-claim-uuid! ctx :gpu1 "pod-uid")
+      (let [labels (get-in @captured-request [:body :metadata :labels])]
+        (is (= "default" (get labels "fudo.org/pod.namespace")))
+        (is (= "test-pod" (get labels "fudo.org/pod.name"))))))
+
   (testing "Succeed when a matching device can be claimed"
     (with-redefs [core/try-claim-uuid! (fn [_ _ _] true)]
       (let [ctx {:k8s-client (mock-k8s-client)}
