@@ -187,7 +187,7 @@
                        (filter
                         (fn [[_ {device-labels :labels}]]
                           (subset? req-labels device-labels)))
-                       device-labels))
+                       device-labels)]
     (log/debugf "matching devices: %s" (pr-str matching))
     matching))
 
@@ -207,27 +207,27 @@
       (log/infof "requested tags for pod %s: %s" pod-name (format-labels labels))
       (log/infof "available tags: %s" (format-labels available))
       (log/debugf "device label map: %s" (util/pprint-string device-labels))
-      (let [matching (find-matching-devices device-labels labels)
+      (if (empty? device-labels)
+        (log/infof "no devices discovered when scheduling pod %s" pod-name)
+        (let [matching (find-matching-devices device-labels labels)]
+          (if (empty? matching)
+            (log/infof "no matching devices available for pod %s" pod-name)
             ;; Iterate deterministically or randomly; here we randomize to spread load
-            result   (let [order (shuffle (keys matching))]
-                       (some (fn [dev-uuid]
-                               (try
-                                 (when (try-claim-uuid! ctx dev-uuid pod-uid)
-                                   (log/infof "claimed device %s for pod %s on node %s"
-                                              dev-uuid pod-name (-> matching dev-uuid :node))
-                                   {:device-id dev-uuid
-                                    :node      (-> matching dev-uuid :node)})
-                                 (catch Exception e
-                                   (log/error e (format "Failed to claim device %s for pod %s"
-                                                        dev-uuid pod-name))
-                                   (log/debug (with-out-str (print-stack-trace e)))
-                                   nil)))
-                             order))]
-        (when (empty? matching)
-          (log/infof "no matching devices available for pod %s" pod-name))
-        (when (empty? device-labels)
-          (log/infof "no devices discovered when scheduling pod %s" pod-name))
-        result))
+            (let [result (when-let [order (shuffle (keys matching))]
+                           (some (fn [dev-uuid]
+                                   (try 
+                                     (when (try-claim-uuid! ctx dev-uuid pod-uid)
+                                       (log/infof "claimed device %s for pod %s on node %s"
+                                                  dev-uuid pod-name (-> matching dev-uuid :node))
+                                       {:device-id dev-uuid
+                                        :node      (-> matching dev-uuid :node)})
+                                     (catch Exception e
+                                       (log/error e (format "Failed to claim device %s for pod %s"
+                                                            dev-uuid pod-name))
+                                       (log/debug (with-out-str (print-stack-trace e)))
+                                       nil)))
+                                 order))]
+              result)))))
     (catch Exception e
       (log/error e "Failed to pick device via Lease")
       (log/debug (with-out-str (print-stack-trace e)))
