@@ -211,11 +211,17 @@
             ;; Iterate deterministically or randomly; here we randomize to spread load
             result   (let [order (shuffle (keys matching))]
                        (some (fn [dev-uuid]
-                               (when (try-claim-uuid! ctx dev-uuid pod-uid)
-                                 (log/infof "claimed device %s for pod %s on node %s"
-                                            dev-uuid pod-name (-> matching dev-uuid :node))
-                                 {:device-id dev-uuid
-                                  :node      (-> matching dev-uuid :node)}))
+                               (try
+                                 (when (try-claim-uuid! ctx dev-uuid pod-uid)
+                                   (log/infof "claimed device %s for pod %s on node %s"
+                                              dev-uuid pod-name (-> matching dev-uuid :node))
+                                   {:device-id dev-uuid
+                                    :node      (-> matching dev-uuid :node)})
+                                 (catch Exception e
+                                   (log/error e (format "Failed to claim device %s for pod %s"
+                                                        dev-uuid pod-name))
+                                   (log/debug (with-out-str (print-stack-trace e)))
+                                   nil)))
                              order))]
         (when (empty? matching)
           (log/infof "no matching devices available for pod %s" pod-name))
