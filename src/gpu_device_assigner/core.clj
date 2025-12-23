@@ -107,7 +107,7 @@
           (do (log/error (format "unexpected error claiming gpu %s for pod %s"
                                  device-uuid pod-uid))
               false)))
-      (catch Exception e
+      (catch Throwable e
         (log/error (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
         (log/debug (with-out-str (print-stack-trace e)))
         false))))
@@ -215,20 +215,20 @@
             ;; Iterate deterministically or randomly; here we randomize to spread load
             (let [result (when-let [order (shuffle (keys matching))]
                            (some (fn [dev-uuid]
-                                   (try 
+                                   (try
                                      (when (try-claim-uuid! ctx dev-uuid pod-uid)
                                        (log/infof "claimed device %s for pod %s on node %s"
                                                   dev-uuid pod-name (-> matching dev-uuid :node))
                                        {:device-id dev-uuid
                                         :node      (-> matching dev-uuid :node)})
-                                     (catch Exception e
+                                     (catch Throwable e
                                        (log/error e (format "Failed to claim device %s for pod %s"
                                                             dev-uuid pod-name))
                                        (log/debug (with-out-str (print-stack-trace e)))
                                        nil)))
                                  order))]
               result)))))
-    (catch Exception e
+    (catch Throwable e
       (log/error e "Failed to pick device via Lease")
       (log/debug (with-out-str (print-stack-trace e)))
       nil)))

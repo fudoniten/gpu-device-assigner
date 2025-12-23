@@ -84,11 +84,12 @@
                                     gpu-reservations {}}}]
                         (k8s/->K8SClient
                          (reify k8s/IK8SBaseClient
-                           (invoke [_ {:keys [kind action request]}]
-                             (let [node {:metadata {:annotations {:fudo.org/gpu.device.labels
-                                                                  (util/base64-encode (util/try-json-generate gpu-label-map))
-                                                                  :fudo.org/gpu.device.reservations
-                                                                  (util/base64-encode (util/try-json-generate gpu-reservations))
+                             (invoke [_ {:keys [kind action request]}]
+                               (let [node {:metadata {:name "node1"
+                                                      :annotations {:fudo.org/gpu.device.labels
+                                                                    (util/base64-encode (util/try-json-generate gpu-label-map))
+                                                                    :fudo.org/gpu.device.reservations
+                                                                    (util/base64-encode (util/try-json-generate gpu-reservations))
 }}}]
                                (case [kind action]
                                  [:Node :list] {:items [node]}
@@ -119,10 +120,11 @@
                              (reify k8s/IK8SBaseClient
                                (invoke [_ {:keys [kind action]}]
                                  (case [kind action]
-                                   [:Node :list] [{:metadata {:annotations {:fudo.org/gpu.device.labels
-                                                                            (util/base64-encode (util/try-json-generate {"gpu1" #{"label1"}}))
-                                                                            :fudo.org/gpu.device.reservations
-                                                                            (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}})}}}]
+                                   [:Node :list] {:items [{:metadata {:name "node1"
+                                                                     :annotations {:fudo.org/gpu.device.labels
+                                                                                   (util/base64-encode (util/try-json-generate {"gpu1" #{"label1"}}))
+                                                                                   :fudo.org/gpu.device.reservations
+                                                                                   (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}}))}}]}
                                    [:Pod :get] (throw (ex-info "Not found" {:type :not-found}))
                                    [:Node :patch/json] true))))}
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
