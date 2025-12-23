@@ -12,44 +12,6 @@
             [taoensso.telemere :as log])
   (:import [java.time OffsetDateTime Duration]))
 
-(defn- unpack-reservations
-  "Decode reservation annotations which may be raw JSON or base64 encoded JSON."
-  [annotations]
-  (let [raw (:fudo.org/gpu.device.reservations annotations)
-        parse-json (fn [s]
-                     (try
-                       (util/parse-json s)
-                       (catch Exception _ nil)))]
-    (or (some-> raw parse-json)
-        (some-> raw util/base64-decode String. parse-json))))
-
-(defn- clear-stale-reservation!
-  "If a requested device is reserved by a pod that no longer exists, clear the reservation
-   and return the device id so it can be reassigned."
-  [{:keys [k8s-client]} node requested-labels]
-  (when node
-    (let [annotations      (get-node-annotations {:k8s-client k8s-client} node)
-          device-labels    (-unpack-device-labels annotations)
-          reservations     (unpack-reservations annotations)
-          labels-by-device (into {}
-                                  (map (fn [[dev labels]]
-                                         [(keyword dev) (set (map keyword labels))]))
-                                  device-labels)]
-      (some (fn [[device {:keys [pod namespace]}]]
-              (let [device-k (keyword device)
-                    device-labels (get labels-by-device device-k)]
-                (when (and device-labels
-                           (subset? requested-labels device-labels)
-                           (not (k8s/pod-exists? k8s-client pod namespace)))
-                  (let [new-reservations (dissoc reservations device)]
-                    (k8s/patch-node-json k8s-client
-                                         node
-                                         [{:op    "replace"
-                                           :path  "/metadata/annotations/fudo.org~1gpu.device.reservations"
-                                           :value (util/try-json-generate new-reservations)}])
-                    (name device-k)))))
-            reservations))))
-
 ;;;; ==== Lease helpers
 
 (defn get-claim-id
@@ -129,8 +91,15 @@
               true)
 
           (= 409 status)
-          (let [{lease :body} (k8s/get-lease k8s-client ns nm)]
-            (if (lease-expired? lease)
+          (let [{lease :body} (k8s/get-lease k8s-client ns nm)
+                labels        (get-in lease [:metadata :labels])
+                pod-ns        (or (get labels "fudo.org/pod.namespace")
+                                  (get labels :fudo.org/pod.namespace))
+                holder        (get-in lease [:spec :holderIdentity])
+                holder-exists (when (and pod-ns holder)
+                                (k8s/pod-uid-exists? k8s-client pod-ns holder))]
+            (if (or (lease-expired? lease)
+                    (not holder-exists))
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
                                                       {:spec {:holderIdentity pod-uid
                                                               :renewTime (time/now-rfc3339-micro)}})]
@@ -277,18 +246,16 @@
   "Claim a GPU via Lease and return the JSONPatch-ready info."
   [ctx {:keys [pod namespace requested-labels uid node]}]
   (let [requested-labels (set (map keyword requested-labels))]
-    (if-let [stale-device (clear-stale-reservation! ctx node requested-labels)]
-      stale-device
-      ;; Make UID available to pick-device -> try-claim-uuid!
-      (if-let [{:keys [device-id node]} (util/pthru-label "PICKED DEVICE"
-                                                          (pick-device (assoc ctx
-                                                                              :namespace namespace
-                                                                              :pod pod)
-                                                                       uid requested-labels))]
-        (do (log/info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
-                              device-id namespace pod node))
-            {:device-id device-id :pod pod :namespace namespace :node node})
-        (do (log/error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                               namespace pod (format-labels requested-labels)))
-            nil)))))
+    ;; Make UID available to pick-device -> try-claim-uuid!
+    (if-let [{:keys [device-id node]} (util/pthru-label "PICKED DEVICE"
+                                                        (pick-device (assoc ctx
+                                                                            :namespace namespace
+                                                                            :pod pod)
+                                                                     uid requested-labels))]
+      (do (log/info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
+                            device-id namespace pod node))
+          {:device-id device-id :pod pod :namespace namespace :node node})
+      (do (log/error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
+                             namespace pod (format-labels requested-labels)))
+          nil))))
 

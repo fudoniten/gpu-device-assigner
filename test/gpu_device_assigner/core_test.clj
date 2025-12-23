@@ -2,6 +2,7 @@
   (:require [gpu-device-assigner.core :as core]
             [gpu-device-assigner.http :as http]
             [gpu-device-assigner.k8s-client :as k8s]
+            [gpu-device-assigner.time :as gtime]
             [gpu-device-assigner.util :as util]
             [clojure.test :refer [deftest is testing run-tests]]))
 
@@ -96,19 +97,27 @@
         (is (= :gpu1 (:device-id result)))
         (is (= "node1" (:node result))))))
 
-  (testing "Succeed if a matching device is found, and is reserved but by a pod that no longer exists"
-    (let [ctx {:k8s-client (k8s/->K8SClient
-                             (reify k8s/IK8SBaseClient
-                               (invoke [_ {:keys [kind action]}]
-                                 (case [kind action]
-                                   [:Node :list] {:items [{:metadata {:name "node1"
-                                                                      :annotations {:fudo.org/gpu.device.labels
-                                                                                    (util/base64-encode (util/try-json-generate {"gpu1" #{"label1"}}))
-                                                                                    :fudo.org/gpu.device.reservations
-                                                                                    (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}})}}}]}
-                                   [:Pod :get] (throw (ex-info "Not found" {:type :not-found}))
-                                   [:Node :patch/json] true))))}
-          result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
-      (is (= "gpu1" result)))))
+  (testing "Succeed if a matching device is found, and is reserved via Lease by a pod that no longer exists"
+    (let [lease {:metadata {:name "gpu1"
+                            :labels {"fudo.org/gpu.uuid" "gpu1"
+                                     "fudo.org/pod.namespace" "default"
+                                     "fudo.org/pod.name" "missing-pod"}}
+                 :spec {:holderIdentity "missing-pod-uid"
+                        :leaseDurationSeconds 300
+                        :renewTime (gtime/now-rfc3339-micro)}}
+          ctx   {:k8s-client (k8s/->K8SClient
+                              (reify k8s/IK8SBaseClient
+                                (invoke [_ {:keys [kind action request]}]
+                                  (case [kind action]
+                                    [:Node :list] {:items [{:metadata {:name "node1"
+                                                                       :annotations {:fudo.org/gpu.device.labels
+                                                                                     (util/base64-encode (util/try-json-generate {"gpu1" #{"label1"}}))}}}]}
+                                    [:Lease :create] {:status 409}
+                                    [:Lease :get] {:body lease}
+                                    [:Lease :patch/json-merge] {:status 200}
+                                    [:Pod :list] {:items []})))}}
+          result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"} :uid "pod-uid"})]
+      (is (= :gpu1 (:device-id result)))
+      (is (= "node1" (:node result))))))
 
 (run-tests 'gpu-device-assigner.core-test)
