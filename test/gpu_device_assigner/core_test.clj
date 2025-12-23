@@ -46,7 +46,8 @@
                                    [:Pod :get] (if (= "other-pod" (:name request))
                                                  {:name (:name request) :namespace (:namespace request)}
                                                  (throw (ex-info "Not found" {:type :not-found})))
-                                   [:Node :patch/json] true))))))]
+                                   [:Node :patch/json] true))))
+                           mock-logger))]
     (testing "Handle valid mutation request"
       (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1"})]
         (let [ctx {:logger mock-logger}
@@ -96,18 +97,21 @@
                     (warn  [_ _])
                     (info  [_ _])
                     (debug [_ _]))
-      mock-k8s-client (fn [& {:keys [gpu-label-map]
-                             :or   {gpu-label-map {:gpu1 #{:fudo.org/gpu.test}}}}]
+      mock-k8s-client (fn [& {:keys [gpu-label-map gpu-reservations]
+                             :or   {gpu-label-map {:gpu1 #{:fudo.org/gpu.test}}
+                                    gpu-reservations {}}}]
                         (k8s/->K8SClient
                          (reify k8s/IK8SBaseClient
                            (invoke [_ {:keys [kind action request]}]
                              (let [node {:metadata {:annotations {:fudo.org/gpu.device.labels
                                                                   (util/base64-encode (util/try-json-generate gpu-label-map))
                                                                   :fudo.org/gpu.device.reservations
-                                                                  (util/base64-encode (util/try-json-generate gpu-reservations))}}}]
+                                                                  (util/base64-encode (util/try-json-generate gpu-reservations))
+}}}]
                                (case [kind action]
                                  [:Node :list] {:items [node]}
-                                 [:Node :get]  node))))))]
+                                 [:Node :get]  node))))
+                         mock-logger))]
   (testing "Fail if no matching device is found"
     (let [ctx {:logger mock-logger :k8s-client (mock-k8s-client)}
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.other}})]
@@ -131,7 +135,8 @@
                                                                            :fudo.org/gpu.device.reservations
                                                                            (util/try-json-generate {"gpu1" {:pod "nonexistent-pod" :namespace "default"}})}}}]
                                   [:Pod :get] (throw (ex-info "Not found" {:type :not-found}))
-                                  [:Node :patch/json] true))))}
+                                  [:Node :patch/json] true))}
+                            mock-logger)}
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"}})]
       (is (= "gpu1" result)))))
 
