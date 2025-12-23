@@ -4,9 +4,8 @@
             [clojure.string :as str]
             [clojure.stacktrace :refer [print-stack-trace]]
 
-            [gpu-device-assigner.logging :as log]
-
-            [kubernetes-api.core :as k8s])
+            [kubernetes-api.core :as k8s]
+            [taoensso.timbre :as log])
   (:import clojure.lang.ExceptionInfo
            java.net.URL
            java.util.Base64))
@@ -64,7 +63,7 @@
   (str (lease-collection-path namespace) "/" name))
 
 (defrecord K8SClient
-    [client logger]
+    [client]
 
     IK8SClient
     (get-node [_ node-name]
@@ -205,15 +204,15 @@
   (-> token-file (slurp) (str/trim)))
 
 (s/fdef create
-  :args (s/keys* :req-un [::url ::token ::certificate-authority-data :log/logger])
+  :args (s/keys* :req-un [::url ::token ::certificate-authority-data])
   :ret  ::client)
 (defn create
   "Create a new Kubernetes client with the given configuration."
-  [& {:keys [logger url] :as req}]
+  [& {:keys [url] :as req}]
   (try
-    (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data]))) logger)
+    (->K8SClient (->K8SBaseClient (k8s/client url (select-keys req [:token :certificate-authority-data]))))
     (catch Exception e
-      (log/fatal logger (str "failed to create k8s-client: " (.getMessage e)))
+      (log/fatal (str "failed to create k8s-client: " (.getMessage e)))
       (throw (ex-info "failed to create k8s-client" {:error e})))))
 
 (stest/instrument 'create)

@@ -6,10 +6,10 @@
             [clojure.spec.test.alpha :as stest]
 
             [gpu-device-assigner.context :as context]
-            [gpu-device-assigner.logging :as log]
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
-            [gpu-device-assigner.util :as util])
+            [gpu-device-assigner.util :as util]
+            [taoensso.timbre :as log])
   (:import [java.time OffsetDateTime Duration]))
 
 ;;;; ==== Lease helpers
@@ -68,7 +68,7 @@
    - POST Lease -> 201 => win
    - 409 => GET; if expired => PATCH renew+holderIdentity => win
    - else lose"
-  [{:keys [k8s-client logger namespace pod] :as ctx} device-uuid pod-uid]
+  [{:keys [k8s-client namespace pod] :as ctx} device-uuid pod-uid]
   (let [pod-ns namespace
         ns   (claims-namespace ctx)
         nm   (lease-name device-uuid)
@@ -79,8 +79,8 @@
       (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
-          (do (log/info logger (format "successfully claimed gpu %s for pod %s"
-                                       device-uuid pod-uid))
+          (do (log/info (format "successfully claimed gpu %s for pod %s"
+                                device-uuid pod-uid))
               true)
 
           (= 409 status)
@@ -89,20 +89,20 @@
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
                                                       {:spec {:holderIdentity pod-uid
                                                               :renewTime (time/now-rfc3339-micro)}})]
-                (log/info logger (format "attempting to claim gpu %s for pod %s"
-                                         device-uuid pod-uid))
+                (log/info (format "attempting to claim gpu %s for pod %s"
+                                  device-uuid pod-uid))
                 (<= 200 status 299))
-              (do (log/warn logger (format "failed to claim gpu %s for pod %s, unexpired lease exists"
-                                           device-uuid pod-uid))
+              (do (log/warn (format "failed to claim gpu %s for pod %s, unexpired lease exists"
+                                    device-uuid pod-uid))
                   false)))
 
           :else
-          (do (log/error logger (format "unexpected error claiming gpu %s for pod %s"
-                                        device-uuid pod-uid))
+          (do (log/error (format "unexpected error claiming gpu %s for pod %s"
+                                 device-uuid pod-uid))
               false)))
       (catch Exception e
-        (log/error logger (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
-        (log/debug logger (with-out-str (print-stack-trace e)))
+        (log/error (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
+        (log/debug (with-out-str (print-stack-trace e)))
         false))))
 
 ;;;; ==== node annotations
@@ -188,21 +188,21 @@
 (defn pick-device
   "Pick the first candidate device whose Lease we can claim atomically.
    Returns {:device-id <uuid> :node <node>} or nil."
-  [{:keys [logger] :as ctx} pod-uid labels]
+  [ctx pod-uid labels]
   (try
     (let [device-labels (get-all-device-labels ctx)]
-      (log/debug logger (str "\n##########\n#  REQUESTED\n##########\n\n"
-                             (util/pprint-string labels)))
-      (log/debug logger (str "\n##########\n#  DEVICES\n##########\n\n"
-                             (util/pprint-string device-labels)))
+      (log/debug (str "\n##########\n#  REQUESTED\n##########\n\n"
+                      (util/pprint-string labels)))
+      (log/debug (str "\n##########\n#  DEVICES\n##########\n\n"
+                      (util/pprint-string device-labels)))
       (let [matching (find-matching-devices device-labels labels)]
-        (log/debug logger (str "\n##########\n#  MATCHING\n##########\n\n"
-                               (util/pprint-string matching)))
+        (log/debug (str "\n##########\n#  MATCHING\n##########\n\n"
+                        (util/pprint-string matching)))
         ;; Iterate deterministically or randomly; here we randomize to spread load
         (let [order (shuffle (keys matching))]
           (some (fn [dev-uuid]
                   (when (try-claim-uuid! ctx dev-uuid pod-uid)
-                    (log/info logger (str "\n******\n*** CLAIMED DEVICE %s\n******" dev-uuid))
+                    (log/info (str "\n******\n*** CLAIMED DEVICE %s\n******" dev-uuid))
                     {:device-id dev-uuid
                      :node      (-> matching dev-uuid :node)}))
                 order))))
@@ -214,17 +214,17 @@
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."
-  [{:keys [logger] :as ctx} {:keys [pod namespace requested-labels uid]}]
+  [ctx {:keys [pod namespace requested-labels uid]}]
   ;; Make UID available to pick-device -> try-claim-uuid!
   (if-let [{:keys [device-id node]} (util/pthru-label "PICKED DEVICE"
                                                       (pick-device (assoc ctx
                                                                           :namespace namespace
                                                                           :pod pod)
                                                                    uid requested-labels))]
-    (do (log/info logger (format "claimed lease for %s; assigning to pod %s/%s on node %s"
-                                 device-id namespace pod node))
+    (do (log/info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
+                          device-id namespace pod node))
         {:device-id device-id :pod pod :namespace namespace :node node})
-    (do (log/error logger (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                                  namespace pod (str/join "," (map name requested-labels))))
+    (do (log/error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
+                           namespace pod (str/join "," (map name requested-labels))))
         nil)))
 
