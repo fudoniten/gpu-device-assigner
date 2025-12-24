@@ -119,6 +119,6 @@
           (log! :info "Stopping gpu-device-assigner API service...")
           (.stop api-server)))
       (catch Exception e
-        (log/error! (format "error in main: %s" (.getMessage e)))
-        (log! :debug (print-stack-trace e))))
+        (log! :error (format "error in main: %s" (.getMessage e)))
+        (log! :error (print-stack-trace e))))
     (msg-quit 0 "stopping gpu-device-assigner...")))
