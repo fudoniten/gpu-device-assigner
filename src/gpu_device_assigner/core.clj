@@ -82,8 +82,8 @@
                          {:extra-labels {"fudo.org/pod.namespace" pod-ns
                                          "fudo.org/pod.name"      pod}})]
     (try
-      (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE"
-                                               (k8s/create-lease k8s-client ns nm body))]
+      (let [{:keys [status] :as resp} (util/pthru-label "LEASE-CREATE-RESPONSE"
+                                                        (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
           (do (log! :info (format "successfully claimed gpu %s for pod %s"
@@ -112,7 +112,7 @@
 
           :else
           (do (log! :error (format "unexpected error claiming gpu %s for pod %s: %s"
-                                   device-uuid pod-uid (util/pprint-string status)))
+                                   device-uuid pod-uid (util/pprint-string resp)))
               nil)))
       (catch Throwable e
         (log/error! (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
