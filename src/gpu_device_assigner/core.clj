@@ -111,10 +111,8 @@
                   false)))
 
           :else
-          (do (log! :debug (format "unexpected error claiming gpu %s for pod %s: %s"
+          (do (log! :error (format "unexpected error claiming gpu %s for pod %s: %s"
                                    device-uuid pod-uid (util/pprint-string status)))
-              (log! :error (format "unexpected error claiming gpu %s for pod %s"
-                                   device-uuid pod-uid))
               nil)))
       (catch Throwable e
         (log/error! (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
