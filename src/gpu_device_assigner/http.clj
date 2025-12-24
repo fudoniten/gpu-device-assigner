@@ -157,13 +157,14 @@
                     :host "0.0.0.0"}))
 
 (defn- device->row [[device {:keys [node labels assignment] :as row}]]
-  (let [{:keys [namespace uid name exists?]} assignment
-        pod-label (when assignment
-                    (str namespace "/" (or name uid)))
+  (let [pod-label (when assignment
+                    (let [{:keys [namespace uid name]} assignment]
+                      (str namespace "/" (or name uid))))
+        exists?   (:exists? assignment)
         status    (cond
                     (nil? assignment) "available"
-                    (true? exists?) "assigned (pod exists)"
-                    (false? exists?) "assigned (pod missing)"
+                    (true? exists?)   "assigned (pod exists)"
+                    (false? exists?)  "assigned (pod missing)"
                     :else "assigned")]
     (try
       [:tr
