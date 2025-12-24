@@ -156,7 +156,7 @@
                     :ssl? false
                     :host "0.0.0.0"}))
 
-(defn- device->row [[device {:keys [node labels assignment]}]]
+(defn- device->row [[device {:keys [node labels assignment] :as row}]]
   (let [{:keys [namespace uid name exists?]} assignment
         pod-label (when assignment
                     (str namespace "/" (or name uid)))
@@ -165,12 +165,18 @@
                     (true? exists?) "assigned (pod exists)"
                     (false? exists?) "assigned (pod missing)"
                     :else "assigned")]
-    [:tr
-     [:th {:scope "row"} (name device)]
-     [:td (str/join ", " labels)]
-     [:td node]
-     [:td (or pod-label "-")]
-     [:td status]]))
+    (try
+     [:tr
+      [:th {:scope "row"} (name device)]
+      [:td (str/join ", " labels)]
+      [:td node]
+      [:td (or pod-label "-")]
+      [:td status]]
+     (catch Throwable e
+       (log! :error (format "failed to generate row for device %s: %s"
+                            device (util/pprint-string row)))
+       (log! :debug (util/capture-stack-trace e))
+       nil))))
 
 (defn- render-device-table [inventory]
   (let [inventory (log/trace! :device/inventory inventory)

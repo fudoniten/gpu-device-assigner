@@ -1,6 +1,7 @@
 (ns gpu-device-assigner.util
   (:require [clojure.pprint :refer [pprint]]
             [clojure.string :as str]
+            [clojure.stacktrace :refer [print-stack-trace]]
             [cheshire.core :as json]
             [taoensso.telemere :as log :refer [log!]])
   (:import java.util.Base64))
@@ -9,6 +10,10 @@
   "Pretty-print an object to a string for readable logging."
   [o]
   (with-out-str (pprint o)))
+
+(defn capture-stack-trace
+  [e]
+  (with-out-str (print-stack-trace e)))
 
 (defn pthru-label
   "Log a labeled value and return it unchanged."
