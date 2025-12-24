@@ -166,16 +166,19 @@
                     (true? exists?)   "assigned (pod exists)"
                     (false? exists?)  "expired"
                     :else "assigned")]
-    (try
-      [:tr
-       [:th {:scope "row"} (name device)]
-       [:td (str/join ", " (map name labels))]
-       [:td node]
-       [:td (or pod-label "-")]
-       [:td status]]
-      (catch Throwable e
-        (log! :error (format "failed to generate row for device %s: %s"
-                             device (util/pprint-string row)))
+      (try
+        [:tr
+         [:th {:scope "row"} (name device)]
+         [:td (if (seq labels)
+                (for [label labels]
+                  [:div (name label)])
+                "-")]
+         [:td node]
+         [:td (or pod-label "-")]
+         [:td status]]
+        (catch Throwable e
+          (log! :error (format "failed to generate row for device %s: %s"
+                               device (util/pprint-string row)))
         (log! :error (util/capture-stack-trace e))
         nil))))
 
