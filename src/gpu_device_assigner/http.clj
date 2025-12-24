@@ -1,6 +1,7 @@
 (ns gpu-device-assigner.http
   (:require [clojure.string :as str]
             [clojure.stacktrace :refer [print-stack-trace]]
+            [hiccup.page :refer [html5]]
             [reitit.ring :as ring]
             [ring.adapter.jetty :as jetty]
             [ring.util.response :as response]
@@ -164,35 +165,44 @@
                     (true? exists?) "assigned (pod exists)"
                     (false? exists?) "assigned (pod missing)"
                     :else "assigned")]
-    (format "<tr><th scope=\"row\">%s</th><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
-            (name device)
+    [:tr
+     [:th {:scope "row"} (name device)]
+     [:td (if (seq labels)
             (str/join ", " labels)
-            node
-            (or pod-label "-")
-            status)))
+            "-")]
+     [:td node]
+     [:td (or pod-label "-")]
+     [:td status]]))
 
 (defn- render-device-table [inventory]
   (let [rows (if (seq inventory)
-               (str/join "" (map device->row inventory))
-               "<tr><td colspan=\"5\">No devices discovered.</td></tr>")]
-    (format (str "<table><thead><tr><th>Device</th><th>Labels</th><th>Node</th>"
-                 "<th>Assignment</th><th>Status</th></tr></thead><tbody>%s</tbody></table>")
-            rows)))
+               (for [[device info] (sort-by key inventory)]
+                 (device->row [device info]))
+               [[:tr [:td {:colspan 5} "No devices discovered."]]])]
+    [:table
+     [:thead
+      [:tr
+       [:th "Device"]
+       [:th "Labels"]
+       [:th "Node"]
+       [:th "Assignment"]
+       [:th "Status"]]]
+     (into [:tbody] rows)]))
 
 (defn- device-status-page [ctx]
   (let [inventory (core/device-inventory ctx)
-        table     (render-device-table inventory)
-        body      (format (str "<html><head><title>GPU Device Assignment</title>"
-                               "<style>body{font-family:Arial,Helvetica,sans-serif;margin:2rem;}"
-                               "table{border-collapse:collapse;width:100%%;}"
-                               "th,td{border:1px solid #ddd;padding:8px;text-align:left;}"
-                               "th{background:#f5f5f5;}</style>"
-                               "</head><body>"
-                               "<h1>GPU Device Assigner</h1>"
-                               "<p>Current device assignments. API JSON available at <code>/devices</code> on the API port.</p>"
-                               "%s"
-                               "</body></html>")
-                             table)]
+        body      (html5
+                   [:head
+                    [:title "GPU Device Assignment"]
+                    [:style "body{font-family:Arial,Helvetica,sans-serif;margin:2rem;}"
+                            "table{border-collapse:collapse;width:100%;}"
+                            "th,td{border:1px solid #ddd;padding:8px;text-align:left;}"
+                            "th{background:#f5f5f5;}"]]
+                   [:body
+                    [:h1 "GPU Device Assigner"]
+                    [:p "Current device assignments. API JSON available at "
+                     [:code "/devices"] " on the API port."]
+                    (render-device-table inventory)])]
     (-> (response/response body)
         (assoc-in [:headers "Content-Type"] "text/html;charset=utf-8"))))
 

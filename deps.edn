@@ -11,6 +11,7 @@
 
         ring/ring-jetty-adapter {:mvn/version "1.14.2"}
         com.taoensso/telemere {:mvn/version "1.0.0-RC1"}
+        hiccup/hiccup {:mvn/version "1.0.5"}
         }
  :aliases {
            :run {:main-opts [ "-m" "gpu-device-assigner.cli" ]}
