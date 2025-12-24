@@ -136,7 +136,7 @@
   "Return a snapshot of devices, their labels, and any current assignments."
   [ctx]
   (fn [_]
-    (response/response (core/device-inventory ctx))))
+    (util/try-json-generate (response/response (core/device-inventory ctx)))))
 
 (defn api-app [ctx]
   (ring/ring-handler
