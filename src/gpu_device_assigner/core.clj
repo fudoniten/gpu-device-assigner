@@ -276,7 +276,9 @@
                            (into {}))]
     (into {}
           (map (fn [[device {:keys [node labels]}]]
-                 (let [assignment (get (log/trace! :device/assignments assignments) (keyword device))
+                 (log! :info (format "looking for device %s among devices: %s"
+                                     device (str/join "," (keys assignments))))
+                 (let [assignment (get assignments (keyword device))
                        pod        (:pod assignment)
                        pod-detail (when pod
                                     (pod-uid->pod ctx (:namespace pod) (:uid pod)))
