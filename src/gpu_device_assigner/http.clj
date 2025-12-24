@@ -131,11 +131,18 @@
                                          :message (format "no GPUs with requested labels free for pod %s/%s"
                                                           namespace pod))))))))
 
+(defn handle-device-inventory
+  "Return a snapshot of devices, their labels, and any current assignments."
+  [ctx]
+  (fn [_]
+    (response/response (core/device-inventory ctx))))
+
 (defn app [ctx]
   (ring/ring-handler
-   (ring/router [["/mutate" {:post (handle-mutation ctx)}]]
+   (ring/router [["/mutate" {:post (handle-mutation ctx)
+                             :middleware [json-middleware]}]
+                 ["/devices" {:get (handle-device-inventory ctx)}]]
                 {:data {:middleware [(log-requests-middleware ctx)
-                                     json-middleware
                                      (open-fail-middleware ctx)]}})
    (constantly {:status 404 :body "not found"})))
 

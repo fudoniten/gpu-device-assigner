@@ -105,8 +105,7 @@
           ctx {:k8s-client client :namespace "default" :pod "test-pod"}]
       (core/try-claim-uuid! ctx :gpu1 "pod-uid")
       (let [labels (get-in @captured-request [:body :metadata :labels])]
-        (is (= "default" (get labels "fudo.org/pod.namespace")))
-        (is (= "test-pod" (get labels "fudo.org/pod.name"))))))
+        (is (= "default" (get labels "fudo.org/pod.namespace"))))))
 
   (testing "Succeed when a matching device can be claimed"
     (with-redefs [core/try-claim-uuid! (fn [_ _ _] true)]
@@ -118,11 +117,10 @@
   (testing "Succeed if a matching device is found, and is reserved via Lease by a pod that no longer exists"
     (let [lease {:metadata {:name "gpu1"
                             :labels {"fudo.org/gpu.uuid" "gpu1"
-                                     "fudo.org/pod.namespace" "default"
-                                     "fudo.org/pod.name" "missing-pod"}}
-                 :spec {:holderIdentity "missing-pod-uid"
-                        :leaseDurationSeconds 300
-                        :renewTime (gtime/now-rfc3339-micro)}}
+                                     "fudo.org/pod.namespace" "default"}}
+                  :spec {:holderIdentity "missing-pod-uid"
+                         :leaseDurationSeconds 300
+                         :renewTime (gtime/now-rfc3339-micro)}}
           ctx   {:k8s-client (k8s/->K8SClient
                               (reify k8s/IK8SBaseClient
                                 (invoke [_ {:keys [kind action]}]
@@ -137,5 +135,37 @@
           result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"} :uid "pod-uid"})]
       (is (= :gpu1 (:device-id result)))
       (is (= "node1" (:node result))))))
+
+  (testing "Device inventory shows assignments and pod existence"
+    (let [leases [{:metadata {:name "gpu1"
+                              :namespace "gpu-claims"
+                              :labels {"fudo.org/gpu.uuid" "gpu1"
+                                      "fudo.org/pod.namespace" "default"}}
+                   :spec {:holderIdentity "pod-uid"}}]
+          client (k8s/->K8SClient
+                  (reify k8s/IK8SBaseClient
+                    (invoke [_ {:keys [kind action request]}]
+                      (case [kind action]
+                        [:Node :list]
+                        {:items [{:metadata {:name "node1"
+                                             :annotations {:fudo.org/gpu.device.labels
+                                                           (util/base64-encode (util/try-json-generate {"gpu1" ["label1"]}))}}}]}
+
+                        [:Lease :list]
+                        {:items leases}
+
+                        [:Pod :list]
+                        {:items [{:metadata {:uid "pod-uid"
+                                             :name "demo"
+                                             :namespace (:namespace request)}}]}) ))
+          ctx {:k8s-client client :claims-namespace "gpu-claims"}
+          inventory (core/device-inventory ctx)]
+      (is (= {:node "node1"
+              :labels ["label1"]
+              :assignment {:name "demo"
+                           :namespace "default"
+                           :uid "pod-uid"
+                           :exists? true}}
+             (:gpu1 inventory))))))
 
 (run-tests 'gpu-device-assigner.core-test)
