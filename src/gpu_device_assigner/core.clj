@@ -276,7 +276,7 @@
                            (into {}))]
     (into {}
           (map (fn [[device {:keys [node labels]}]]
-                 (let [assignment (get (log/trace! assignments) (keyword device))
+                 (let [assignment (get (log/trace! :device/assignments assignments) (keyword device))
                        pod        (:pod assignment)
                        pod-detail (when pod
                                     (pod-uid->pod ctx (:namespace pod) (:uid pod)))
@@ -289,8 +289,8 @@
                                       (some? exists?)          (assoc :exists? exists?)))]
                    [device {:node       node
                             :labels     (-> labels sort vec)
-                            :assignment pod-info}]))
-               (log/trace! device-labels)))))
+                            :assignment pod-info}])))
+          (log/trace! :device/labels device-labels))))
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."
