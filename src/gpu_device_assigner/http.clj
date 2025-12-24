@@ -166,17 +166,17 @@
                     (false? exists?) "assigned (pod missing)"
                     :else "assigned")]
     (try
-     [:tr
-      [:th {:scope "row"} (name device)]
-      [:td (str/join ", " labels)]
-      [:td node]
-      [:td (or pod-label "-")]
-      [:td status]]
-     (catch Throwable e
-       (log! :error (format "failed to generate row for device %s: %s"
-                            device (util/pprint-string row)))
-       (log! :debug (util/capture-stack-trace e))
-       nil))))
+      [:tr
+       [:th {:scope "row"} (name device)]
+       [:td (str/join ", " labels)]
+       [:td node]
+       [:td (or pod-label "-")]
+       [:td status]]
+      (catch Throwable e
+        (log! :error (format "failed to generate row for device %s: %s"
+                             device (util/pprint-string row)))
+        (log! :error (util/capture-stack-trace e))
+        nil))))
 
 (defn- render-device-table [inventory]
   (let [inventory (log/trace! :device/inventory inventory)
