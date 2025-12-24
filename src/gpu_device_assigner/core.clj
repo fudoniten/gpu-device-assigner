@@ -111,15 +111,15 @@
                   false)))
 
           :else
-          (do (log/error! (format "unexpected error claiming gpu %s for pod %s"
-                                  device-uuid pod-uid))
-              (log! :debug (format "unexpected error claiming gpu %s for pod %s: %s"
+          (do (log! :debug (format "unexpected error claiming gpu %s for pod %s: %s"
                                    device-uuid pod-uid (util/pprint-string status)))
-              false)))
+              (log! :error (format "unexpected error claiming gpu %s for pod %s"
+                                   device-uuid pod-uid))
+              nil)))
       (catch Throwable e
         (log/error! (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
         (log! :debug (with-out-str (print-stack-trace e)))
-        false))))
+        nil))))
 
 ;;;; ==== node annotations
 
