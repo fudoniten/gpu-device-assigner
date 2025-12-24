@@ -279,7 +279,8 @@
                  (if-let [assignment (get assignments (keyword device))]
                    (let [pod        (:pod assignment)
                          pod-detail (when pod
-                                      (pod-uid->pod ctx (:namespace pod) (:uid pod)))
+                                      (log/trace! :device/pod-detail (pod-uid->pod ctx (:namespace pod)
+                                                                                   (log/trace! :device/pod-uid (:uid pod)))))
                          exists?    (boolean pod-detail)
                          pod-info   (when pod
                                       (cond-> pod
