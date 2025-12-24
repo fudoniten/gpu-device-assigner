@@ -157,7 +157,7 @@
                         [:Pod :list]
                         {:items [{:metadata {:uid "pod-uid"
                                              :name "demo"
-                                             :namespace (:namespace request)}}]}) ))
+                                             :namespace (:namespace request)}}]}))))
           ctx {:k8s-client client :claims-namespace "gpu-claims"}
           inventory (core/device-inventory ctx)]
       (is (= {:node "node1"
@@ -166,6 +166,6 @@
                            :namespace "default"
                            :uid "pod-uid"
                            :exists? true}}
-             (:gpu1 inventory))))))
+             (:gpu1 inventory)))))
 
 (run-tests 'gpu-device-assigner.core-test)
