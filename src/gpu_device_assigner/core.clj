@@ -276,22 +276,21 @@
                            (into {}))]
     (into {}
           (map (fn [[device {:keys [node labels]}]]
-                 (log! :info (format "looking for device %s among devices: %s"
-                                     device (str/join "," (keys assignments))))
-                 (let [assignment (get assignments (keyword device))
-                       pod        (:pod assignment)
-                       pod-detail (when pod
-                                    (pod-uid->pod ctx (:namespace pod) (:uid pod)))
-                       exists?    (boolean pod-detail)
-                       pod-info   (when pod
-                                    (cond-> pod
-                                      pod-detail               (assoc :name (get-in pod-detail [:metadata :name]))
-                                      (some? (:namespace pod)) (assoc :namespace (:namespace pod))
-                                      (some? (:uid pod))       (assoc :uid (:uid pod))
-                                      (some? exists?)          (assoc :exists? exists?)))]
-                   [device {:node       node
-                            :labels     (-> labels sort vec)
-                            :assignment pod-info}])))
+                 (if-let [assignment (get assignments (keyword device))]
+                   (let [pod        (:pod assignment)
+                         pod-detail (when pod
+                                      (pod-uid->pod ctx (:namespace pod) (:uid pod)))
+                         exists?    (boolean pod-detail)
+                         pod-info   (when pod
+                                      (cond-> pod
+                                        pod-detail               (assoc :name (get-in pod-detail [:metadata :name]))
+                                        (some? (:namespace pod)) (assoc :namespace (:namespace pod))
+                                        (some? (:uid pod))       (assoc :uid (:uid pod))
+                                        (some? exists?)          (assoc :exists? exists?)))]
+                     [device {:node       node
+                              :labels     (-> labels sort vec)
+                              :assignment pod-info}])
+                   [device {:node node :labels labels}])))
           (log/trace! :device/labels device-labels))))
 
 (defn assign-device
