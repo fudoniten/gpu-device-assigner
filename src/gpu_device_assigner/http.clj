@@ -173,7 +173,7 @@
 
 (defn- render-device-table [inventory]
   (let [rows (if (seq inventory)
-               (str/join "" (map device->row inventory))
+               (str/join "" (map device->row (log/trace! :device/inventory inventory)))
                "<tr><td colspan=\"5\">No devices discovered.</td></tr>")]
     (format (str "<table><thead><tr><th>Device</th><th>Labels</th><th>Node</th>"
                  "<th>Assignment</th><th>Status</th></tr></thead><tbody>%s</tbody></table>")
