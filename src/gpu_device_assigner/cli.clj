@@ -34,10 +34,10 @@
               #(not (.isDirectory (io/as-file %))) "ca-certificate file not a regular file"]]
    ["-k" "--kubernetes-url URL" "URL to Kubernetes master."]
    ["-p" "--port PORT" "Port on which to listen for incoming AdmissionReview requests."
-    :default  443
+    :default  8080
     :parse-fn #(Integer/parseInt %)]
    ["-U" "--ui-port PORT" "Port for the human-friendly UI server."
-    :default 8080
+    :default 8081
     :parse-fn #(Integer/parseInt %)]
    ["-C" "--claims-namespace NAMESPACE" "Namespace in which to store GPU leases."
     :default "gpu-claims"]
