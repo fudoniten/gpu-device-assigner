@@ -164,12 +164,12 @@
         status    (cond
                     (nil? assignment) "available"
                     (true? exists?)   "assigned (pod exists)"
-                    (false? exists?)  "assigned (pod missing)"
+                    (false? exists?)  "expired"
                     :else "assigned")]
     (try
       [:tr
        [:th {:scope "row"} (name device)]
-       [:td (str/join ", " labels)]
+       [:td (str/join ", " (map name labels))]
        [:td node]
        [:td (or pod-label "-")]
        [:td status]]
