@@ -83,7 +83,8 @@
                                          "fudo.org/pod.name"      pod}})]
     (try
       (let [{:keys [status] :as resp} (util/pthru-label "LEASE-CREATE-RESPONSE"
-                                                        (k8s/create-lease k8s-client ns nm body))]
+                                                        (k8s/create-lease k8s-client ns nm
+                                                                          (util/pthru-label "LEASE-CREATE-REQUEST" body)))]
         (cond
           (= 201 status)
           (do (log! :info (format "successfully claimed gpu %s for pod %s"
