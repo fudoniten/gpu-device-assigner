@@ -29,12 +29,15 @@
                #(.canRead (io/as-file %)) "access-token file is not readable"
                #(not (.isDirectory (io/as-file %))) "access-token file not a regular file"]]
    ["-c" "--ca-certificate CA-CERTIFICATE" "Path to base64-encoded CA certificate for Kubernetes"
-    :validate [#(.exists (io/as-file %)) "ca-certificate file does not exist"
-               #(.canRead (io/as-file %)) "ca-certificate file is not readable"
-               #(not (.isDirectory (io/as-file %))) "ca-certificate file not a regular file"]]
+   :validate [#(.exists (io/as-file %)) "ca-certificate file does not exist"
+              #(.canRead (io/as-file %)) "ca-certificate file is not readable"
+              #(not (.isDirectory (io/as-file %))) "ca-certificate file not a regular file"]]
    ["-k" "--kubernetes-url URL" "URL to Kubernetes master."]
-   ["-p" "--port PORT" "Port on which to listen for incoming requests."
+   ["-p" "--port PORT" "Port on which to listen for incoming AdmissionReview requests."
     :default  443
+    :parse-fn #(Integer/parseInt %)]
+   ["-U" "--ui-port PORT" "Port for the human-friendly UI server."
+    :default 8080
     :parse-fn #(Integer/parseInt %)]
    ["-C" "--claims-namespace NAMESPACE" "Namespace in which to store GPU leases."
     :default "gpu-claims"]
@@ -84,6 +87,7 @@
                     port
                     log-level
                     claims-namespace
+                    ui-port
                     renew-interval
                     renew-jitter]} options
             client (k8s/create :url kubernetes-url
@@ -101,16 +105,19 @@
                           (Thread. (fn []
                                      (log! :info "received shutdown request")
                                      (deliver shutdown-signal true))))
-        (log! :info "Starting gpu-device-assigner web service...")
-        (log! :debug (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, log-level=%s"
-                           access-token ca-certificate kubernetes-url port log-level))
-        (let [server (http/start-server ctx port)
+        (log! :info "Starting gpu-device-assigner web services...")
+        (log! :debug (format "Configuration: access-token=%s, ca-certificate=%s, kubernetes-url=%s, port=%d, ui-port=%d, log-level=%s"
+                           access-token ca-certificate kubernetes-url port ui-port log-level))
+        (let [api-server (http/start-api-server ctx port)
+              ui-server  (http/start-ui-server ctx ui-port)
               renewer-future (future (renewer/run-renewer! ctx))]
           @shutdown-signal
           (log! :info "Stopping gpu-device-assigner lease renewal service...")
           (future-cancel renewer-future)
-          (log! :info "Stopping gpu-device-assigner web service...")
-          (.stop server)))
+          (log! :info "Stopping gpu-device-assigner UI service...")
+          (.stop ui-server)
+          (log! :info "Stopping gpu-device-assigner API service...")
+          (.stop api-server)))
       (catch Exception e
         (log/error! (format "error in main: %s" (.getMessage e)))
         (log! :debug (print-stack-trace e))))

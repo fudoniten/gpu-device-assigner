@@ -35,8 +35,11 @@ The application requires several configuration parameters, which can be provided
 - `--access-token`: Path to the token file for Kubernetes access.
 - `--ca-certificate`: Path to the base64-encoded CA certificate for Kubernetes.
 - `--kubernetes-url`: URL to the Kubernetes master.
-- `--port`: Port on which to listen for incoming requests (default: 80).
+- `--port`: Port on which to listen for incoming AdmissionReview API requests (default: 443).
+- `--ui-port`: Port used by the human-readable UI that shows device assignments (default: 8080).
 - `--log-level`: Level at which to log output (default: `warn`).
+
+The service starts both an API listener (for AdmissionReview and JSON `/devices`) and a UI listener that presents the current device inventory in HTML.
 
 
 ## Testing

@@ -137,7 +137,7 @@
   (fn [_]
     (response/response (core/device-inventory ctx))))
 
-(defn app [ctx]
+(defn api-app [ctx]
   (ring/ring-handler
    (ring/router [["/mutate" {:post (handle-mutation ctx)
                              :middleware [json-middleware]}]
@@ -146,10 +146,66 @@
                                      (open-fail-middleware ctx)]}})
    (constantly {:status 404 :body "not found"})))
 
-(defn start-server
-  "Start the web server with the given context and port."
+(defn start-api-server
+  "Start the API web server with the given context and port."
   [ctx port]
-  (jetty/run-jetty (app ctx)
+  (jetty/run-jetty (api-app ctx)
+                   {:port port
+                    :join? false
+                    :ssl? false
+                    :host "0.0.0.0"}))
+
+(defn- device->row [[device {:keys [node labels assignment]}]]
+  (let [{:keys [namespace uid name exists?]} assignment
+        pod-label (when assignment
+                    (str namespace "/" (or name uid)))
+        status    (cond
+                    (nil? assignment) "available"
+                    (true? exists?) "assigned (pod exists)"
+                    (false? exists?) "assigned (pod missing)"
+                    :else "assigned")]
+    (format "<tr><th scope=\"row\">%s</th><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            (name device)
+            (str/join ", " labels)
+            node
+            (or pod-label "-")
+            status)))
+
+(defn- render-device-table [inventory]
+  (let [rows (if (seq inventory)
+               (str/join "" (map device->row inventory))
+               "<tr><td colspan=\"5\">No devices discovered.</td></tr>")]
+    (format (str "<table><thead><tr><th>Device</th><th>Labels</th><th>Node</th>"
+                 "<th>Assignment</th><th>Status</th></tr></thead><tbody>%s</tbody></table>")
+            rows)))
+
+(defn- device-status-page [ctx]
+  (let [inventory (core/device-inventory ctx)
+        table     (render-device-table inventory)
+        body      (format (str "<html><head><title>GPU Device Assigner</title>"
+                               "<style>body{font-family:Arial,Helvetica,sans-serif;margin:2rem;}"
+                               "table{border-collapse:collapse;width:100%%;}"
+                               "th,td{border:1px solid #ddd;padding:8px;text-align:left;}"
+                               "th{background:#f5f5f5;}</style>"
+                               "</head><body>"
+                               "<h1>GPU Device Assigner</h1>"
+                               "<p>Current device assignments. API JSON available at <code>/devices</code> on the API port.</p>"
+                               "%s"
+                               "</body></html>")
+                             table)]
+    (-> (response/response body)
+        (assoc-in [:headers "Content-Type"] "text/html;charset=utf-8"))))
+
+(defn ui-app [ctx]
+  (ring/ring-handler
+   (ring/router [["/" {:get (fn [_] (device-status-page ctx))}]
+                 ["/devices" {:get (handle-device-inventory ctx)}]])
+   (constantly {:status 404 :body "not found"})))
+
+(defn start-ui-server
+  "Start the UI web server with the given context and port."
+  [ctx port]
+  (jetty/run-jetty (ui-app ctx)
                    {:port port
                     :join? false
                     :ssl? false
