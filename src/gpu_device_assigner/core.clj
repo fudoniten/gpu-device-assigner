@@ -80,9 +80,10 @@
         nm   (lease-name device-uuid)
         body (lease-body device-uuid pod-uid
                          {:extra-labels {"fudo.org/pod.namespace" pod-ns
-                                         "fudo.org/pod.name" pod}})]
+                                         "fudo.org/pod.name"      pod}})]
     (try
-      (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE" (k8s/create-lease k8s-client ns nm body))]
+      (let [{:keys [status]} (util/pthru-label "LEASE-CREATE-RESPONSE"
+                                               (k8s/create-lease k8s-client ns nm body))]
         (cond
           (= 201 status)
           (do (log! :info (format "successfully claimed gpu %s for pod %s"
