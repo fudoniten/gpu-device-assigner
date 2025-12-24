@@ -69,6 +69,9 @@
       ;; No renew time in lease
       true)))
 
+(def encode-label util/base64-encode)
+(def decode-label util/base64-decode)
+
 (defn try-claim-uuid!
   "Atmoic claim attempt:
    - POST Lease -> 201 => win
@@ -79,8 +82,8 @@
         ns   (claims-namespace ctx)
         nm   (lease-name device-uuid)
         body (lease-body device-uuid pod-uid
-                         {:extra-labels {"fudo.org/pod.namespace" pod-ns
-                                         "fudo.org/pod.name"      pod}})]
+                         {:extra-labels {"fudo.org/pod.namespace" (encode-label pod-ns)
+                                         "fudo.org/pod.name"      (encode-label pod)}})]
     (try
       (let [{:keys [status] :as resp} (util/pthru-label "LEASE-CREATE-RESPONSE"
                                                         (k8s/create-lease k8s-client ns nm
@@ -94,8 +97,9 @@
           (= 409 status)
           (let [{lease :body} (k8s/get-lease k8s-client ns nm)
                 labels        (get-in lease [:metadata :labels])
-                pod-ns        (or (get labels "fudo.org/pod.namespace")
-                                  (get labels :fudo.org/pod.namespace))
+                pod-ns        (some-> (or (get labels "fudo.org/pod.namespace")
+                                          (get labels :fudo.org/pod.namespace))
+                                      (decode-label))
                 holder        (get-in lease [:spec :holderIdentity])
                 holder-exists (when (and pod-ns holder)
                                 (k8s/pod-uid-exists? k8s-client pod-ns holder))]
