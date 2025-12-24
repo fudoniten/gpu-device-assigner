@@ -255,8 +255,7 @@
   [lease]
   (let [labels  (get-in lease [:metadata :labels])
         device  (or (get labels "fudo.org/gpu.uuid")
-                    (get labels :fudo.org/gpu.uuid)
-                    (get-in lease [:metadata :name]))
+                    (get labels :fudo.org/gpu.uuid))
         pod-ns  (or (get labels "fudo.org/pod.namespace")
                     (get labels :fudo.org/pod.namespace))
         pod-uid (get-in lease [:spec :holderIdentity])]
@@ -277,21 +276,21 @@
                            (into {}))]
     (into {}
           (map (fn [[device {:keys [node labels]}]]
-                 (let [assignment (get assignments device)
+                 (let [assignment (get (log/trace! assignments) (keyword device))
                        pod        (:pod assignment)
                        pod-detail (when pod
                                     (pod-uid->pod ctx (:namespace pod) (:uid pod)))
                        exists?    (boolean pod-detail)
                        pod-info   (when pod
                                     (cond-> pod
-                                      pod-detail (assoc :name (get-in pod-detail [:metadata :name]))
+                                      pod-detail               (assoc :name (get-in pod-detail [:metadata :name]))
                                       (some? (:namespace pod)) (assoc :namespace (:namespace pod))
-                                      (some? (:uid pod)) (assoc :uid (:uid pod))
-                                      (some? exists?) (assoc :exists? exists?)))]
+                                      (some? (:uid pod))       (assoc :uid (:uid pod))
+                                      (some? exists?)          (assoc :exists? exists?)))]
                    [device {:node       node
                             :labels     (-> labels sort vec)
                             :assignment pod-info}]))
-               device-labels))))
+               (log/trace! device-labels)))))
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."

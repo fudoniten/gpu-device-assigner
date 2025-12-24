@@ -182,7 +182,7 @@
 (defn- device-status-page [ctx]
   (let [inventory (core/device-inventory ctx)
         table     (render-device-table inventory)
-        body      (format (str "<html><head><title>GPU Device Assigner</title>"
+        body      (format (str "<html><head><title>GPU Device Assignment</title>"
                                "<style>body{font-family:Arial,Helvetica,sans-serif;margin:2rem;}"
                                "table{border-collapse:collapse;width:100%%;}"
                                "th,td{border:1px solid #ddd;padding:8px;text-align:left;}"
