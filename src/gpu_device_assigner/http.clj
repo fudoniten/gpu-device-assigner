@@ -133,11 +133,13 @@
                                                               :namespace        namespace
                                                               :requested-labels requested-labels})]
               (let [{:keys [device-id node reservation-id]} assigned-device]
-                (admission-review-response :uid uid :allowed? true
-                                           :patch (device-assignment-patch ctx device-id node reservation-id)))
-              (admission-review-response :uid uid :status 429 :allowed? false
-                                         :message (format "no GPUs with requested labels free for pod %s/%s"
-                                                          namespace pod))))))))
+                (log/trace! :admission-review/accept
+                            (admission-review-response :uid uid :allowed? true
+                                                       :patch (device-assignment-patch ctx device-id node reservation-id))))
+              (log/trace! :admission-review/reject
+                          (admission-review-response :uid uid :status 429 :allowed? false
+                                                     :message (format "no GPUs with requested labels free for pod %s/%s"
+                                                                      namespace pod)))))))))
 
 (defn handle-device-inventory
   "Return a snapshot of devices, their labels, and any current assignments."
@@ -149,8 +151,7 @@
   "Finalize a reservation for a pod based on callback payload."
   [ctx]
   (fn [{:keys [namespace name uid reservation-id gpu-uuid] :as req}]
-    (let [_       (log/trace! :lease/finalize (util/pprint-string req))
-          missing (->> [[:namespace namespace]
+    (let [missing (->> [[:namespace namespace]
                         [:name name]
                         [:uid uid]
                         [:reservation-id reservation-id]
