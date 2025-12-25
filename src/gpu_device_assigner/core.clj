@@ -16,7 +16,7 @@
 (defn get-claim-id
   "Extract the AdmissionReview request UID for the pod being mutated."
   [req]
-  (or (get-in req [:request :object :metadata :uid])
+  (or (get-in (log/trace! :admission/request req) [:request :object :metadata :uid])
       (get-in req [:request :uid])))
 
 (defn claims-namespace
@@ -76,14 +76,14 @@
    - else lose"
   [{:keys [k8s-client namespace pod] :as ctx} device-uuid pod-uid]
   (let [pod-ns namespace
-        ns   (claims-namespace ctx)
-        nm   (lease-name device-uuid)
-        body (lease-body device-uuid pod-uid
-                         {:extra-labels {"fudo.org/pod.namespace" pod-ns}})]
+        ns     (claims-namespace ctx)
+        nm     (lease-name device-uuid)
+        body   (lease-body device-uuid pod-uid
+                           {:extra-labels {"fudo.org/pod.namespace" pod-ns}})]
     (try
-      (let [{:keys [status] :as resp} (util/pthru-label "LEASE-CREATE-RESPONSE"
-                                                        (k8s/create-lease k8s-client ns nm
-                                                                          (util/pthru-label "LEASE-CREATE-REQUEST" body)))]
+      (let [{:keys [status] :as resp} (log/trace! :lease/response
+                                                  (k8s/create-lease k8s-client ns nm
+                                                                    (log/trace! :lease/request body)))]
         (cond
           (= 201 status)
           (do (log! :info (format "successfully claimed gpu %s for pod %s"
@@ -301,11 +301,11 @@
   [ctx {:keys [pod namespace requested-labels uid]}]
   (let [requested-labels (set (map keyword requested-labels))]
     ;; Make UID available to pick-device -> try-claim-uuid!
-    (if-let [{:keys [device-id node]} (util/pthru-label "PICKED DEVICE"
-                                                        (pick-device (assoc ctx
-                                                                            :namespace namespace
-                                                                            :pod pod)
-                                                                     uid requested-labels))]
+    (if-let [{:keys [device-id node]} (log/trace! :device/selection
+                                                  (pick-device (assoc ctx
+                                                                      :namespace namespace
+                                                                      :pod pod)
+                                                               uid requested-labels))]
       (when device-id
         (log! :info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
                             device-id namespace pod node))
