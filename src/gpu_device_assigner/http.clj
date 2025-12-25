@@ -149,8 +149,8 @@
   "Finalize a reservation for a pod based on callback payload."
   [ctx]
   (fn [{:keys [namespace name uid reservation-id gpu-uuid] :as req}]
-    (log! :info (util/pprint-string req))
-    (let [missing (->> [[:namespace namespace]
+    (let [_       (log/trace! :lease/finalize (util/pprint-string req))
+          missing (->> [[:namespace namespace]
                         [:name name]
                         [:uid uid]
                         [:reservation-id reservation-id]
