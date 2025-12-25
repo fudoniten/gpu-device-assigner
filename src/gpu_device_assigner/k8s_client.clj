@@ -121,11 +121,12 @@
       ;; POST to the collection; ensure metadata.name/namespace are set in body
       (let [body (-> lease-body
                      (assoc-in [:metadata :name] name))]
-        (invoke client
-                {:kind    :Lease
-                 :action  :create
-                 :request {:namespace namespace
-                           :body      body}})))
+        (log/trace! :lease/creation
+                    (invoke client
+                            {:kind    :Lease
+                             :action  :create
+                             :request {:namespace namespace
+                                       :body      body}}))))
 
     (get-lease [_ namespace name]
       (invoke client

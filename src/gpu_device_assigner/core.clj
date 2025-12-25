@@ -275,12 +275,11 @@
         assignments   (->> (k8s/list-leases k8s-client (claims-namespace ctx))
                            :items
                            (keep lease->assignment)
-                           (into {})
-                           (log/trace! :device/leases))]
+                           (into {}))]
     (into {}
           (map (fn [[device {:keys [node labels]}]]
                  (if-let [assignment (get assignments (keyword device))]
-                   (let [pod        (:pod assignment)
+                   (let [pod        (:pod (log/trace! :device/assignment assignment))
                          pod-detail (when pod
                                       (log/trace! :device/pod-detail
                                                   (pod-uid->pod ctx (:namespace pod) (:uid pod))))
