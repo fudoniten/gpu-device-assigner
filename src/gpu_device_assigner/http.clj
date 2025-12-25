@@ -57,8 +57,8 @@
       (try
         (handler req)
         (catch Exception e
-          (log/error! (format "error handling request: %s" (str e)))
-          (log! :debug (with-out-str (print-stack-trace e)))
+          (log! :error (format "error handling request: %s" (str e)))
+          (log! :error (with-out-str (print-stack-trace e)))
           (let [uid (get-in req [:request :uid])]
             (admission-review-response :uid uid
                                        :allowed? false
