@@ -35,9 +35,9 @@
    ["-k" "--kubernetes-url URL" "URL to Kubernetes master."]
    ["-p" "--port PORT" "Port on which to listen for incoming AdmissionReview requests."
     :default  8080
-    :parse-fn #(Integer/parseInt %)]
+   :parse-fn #(Integer/parseInt %)]
    ["-U" "--ui-port PORT" "Port for the human-friendly UI server."
-    :default 8081
+   :default 8081
     :parse-fn #(Integer/parseInt %)]
    ["-C" "--claims-namespace NAMESPACE" "Namespace in which to store GPU leases."
     :default "gpu-claims"]

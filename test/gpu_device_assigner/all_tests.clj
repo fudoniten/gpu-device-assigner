@@ -3,6 +3,7 @@
             [taoensso.telemere :as log]
             [gpu-device-assigner.cli-test :as cli-test]
             [gpu-device-assigner.core-test :as core-test]
+            [gpu-device-assigner.http-test :as http-test]
             [gpu-device-assigner.k8s-client-test :as k8s-client-test]))
 
 (defn -main
@@ -10,4 +11,5 @@
   [& _]
   (run-tests 'gpu-device-assigner.cli-test)
   (run-tests 'gpu-device-assigner.core-test)
+  (run-tests 'gpu-device-assigner.http-test)
   (run-tests 'gpu-device-assigner.k8s-client-test))
