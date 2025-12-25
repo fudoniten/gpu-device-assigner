@@ -248,7 +248,9 @@
   "Lookup a pod by UID within the provided namespace."
   [{:keys [k8s-client]} namespace pod-uid]
   (when (and namespace pod-uid)
-    (k8s/get-pod-by-uid k8s-client namespace pod-uid)))
+    (log/trace! :device/pod-by-uid
+                (k8s/get-pod-by-uid k8s-client namespace
+                                    (log/trace! :device/pod-uid pod-uid)))))
 
 (defn- lease->assignment
   "Extract the device and pod assignment info from a Lease resource."
@@ -279,8 +281,8 @@
                  (if-let [assignment (get assignments (keyword device))]
                    (let [pod        (:pod assignment)
                          pod-detail (when pod
-                                      (log/trace! :device/pod-detail (pod-uid->pod ctx (:namespace pod)
-                                                                                   (log/trace! :device/pod-uid (:uid pod)))))
+                                      (log/trace! :device/pod-detail
+                                                  (pod-uid->pod ctx (:namespace pod) (:uid pod))))
                          exists?    (boolean pod-detail)
                          pod-info   (when pod
                                       (cond-> pod
@@ -292,7 +294,7 @@
                               :labels     (-> labels sort vec)
                               :assignment pod-info}])
                    [device {:node node :labels labels}])))
-          (log/trace! :device/labels device-labels))))
+          device-labels)))
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."
