@@ -38,8 +38,38 @@ The application requires several configuration parameters, which can be provided
 - `--port`: Port on which to listen for incoming AdmissionReview API requests (default: 443).
 - `--ui-port`: Port used by the human-readable UI that shows device assignments (default: 8080).
 - `--log-level`: Level at which to log output (default: `warn`).
-
 The service starts both an API listener (for AdmissionReview and JSON `/devices`) and a UI listener that presents the current device inventory in HTML.
+
+### Finalize callback contract
+
+Reservation finalization is driven by a POST to the `/finalize` API route. The request must be JSON with the following shape:
+
+```json
+{
+  "namespace": "pod-namespace",
+  "name": "pod-name",
+  "uid": "pod-uid",
+  "reservation-id": "reservation identifier returned during mutation",
+  "gpu-uuid": "GPU UUID assigned to the pod"
+}
+```
+
+The callback is expected after a pod is created with the annotations written by the mutating webhook: `fudo.org/gpu.uuid`, `fudo.org/gpu.reservation-id`, and `fudo.org/gpu.node`. A successful finalize request returns `200` with `{ "status": "ok" }`; missing fields return `400` with an error message.
+
+Example curl invocation:
+
+```bash
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "namespace": "default",
+    "name": "example",
+    "uid": "12d34...",
+    "reservation-id": "resv-abc",
+    "gpu-uuid": "GPU-d3adbeef"
+  }' \
+  http://localhost:8080/finalize
+```
 
 
 ## Testing

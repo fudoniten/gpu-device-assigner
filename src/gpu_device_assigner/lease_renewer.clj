@@ -32,24 +32,6 @@
     (and (not deleting?)
          (not (contains? #{:Succeeded :Failed} phase)))))
 
-(defn- annotation-value
-  [annotations k]
-  (or (get annotations k)
-      (get annotations (name k))))
-
-(defn- pod-reservation
-  "Extract reservation metadata from a Pod, if present."
-  [pod]
-  (let [annotations    (get-in pod [:metadata :annotations])
-        reservation-id (annotation-value annotations core/reservation-annotation)
-        device-id      (annotation-value annotations core/gpu-annotation)]
-    (when (and reservation-id device-id)
-      {:reservation-id reservation-id
-       :device-id      device-id
-       :namespace      (get-in pod [:metadata :namespace])
-       :uid            (get-in pod [:metadata :uid])
-       :name           (get-in pod [:metadata :name])})))
-
 (defn- owner-reference
   [{:keys [uid name]}]
   (when (and uid name)
@@ -90,17 +72,6 @@
         (k8s/patch-lease k8s-client claims-namespace lease-name patch)
         (log! :info (format "finalized reservation %s for pod %s/%s on %s"
                             reservation-id namespace name device-id))))))
-
-(defn finalize-reservations-once!
-  [ctx]
-  (try
-    (let [pods (or (some-> (k8s/get-pods (:k8s-client ctx)) :items) [])]
-      (doseq [pod pods]
-        (when-let [reservation (pod-reservation pod)]
-          (finalize-reservation! ctx reservation))))
-    (catch Exception e
-      (log/error! e (format "error while finalizing reservations: %s" (.getMessage e)))
-      (log! :debug (with-out-str (print-stack-trace e))))))
 
 (defn renew-leases-once!
   "List leases in CLAIMS_NS; renew those whose holder pod is still active."
@@ -162,6 +133,5 @@
     (log! :info (format "lease-renewer scanning leases every ~%dms (±%.0f%%)"
                         interval (* jt 100.0)))
     (while true
-      (finalize-reservations-once! ctx)
       (renew-leases-once! ctx)
       (sleep! (jittered interval)))))

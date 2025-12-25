@@ -6,7 +6,6 @@
 (s/def ::claims-namespace string?)
 (s/def ::renew-interval-ms integer?)
 (s/def ::jitter number?)
-
 (s/def ::context
   (s/keys :req-un [::k8s/client ::claims-namespace]
           :opt-un [::renew-interval-ms ::jitter]))

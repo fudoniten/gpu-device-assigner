@@ -7,6 +7,7 @@
             [hiccup2.core :as h]
 
             [gpu-device-assigner.core :as core]
+            [gpu-device-assigner.lease-renewer :as renewer]
             [gpu-device-assigner.util :as util]
             [taoensso.telemere :as log :refer [log!]]))
 
@@ -17,13 +18,18 @@
     (let [body (:body req)]
       (when-not body
         (throw (ex-info "missing request body!" {:req req})))
-      (-> body
-          (slurp)
-          (util/try-json-parse)
-          (handler)
-          (util/try-json-generate)
-          (response/response)
-          (assoc-in [:headers "Content-Type"] "application/json")))))
+      (let [result (-> body
+                       (slurp)
+                       (util/try-json-parse)
+                       (handler))]
+        (if (and (map? result) (contains? result :status))
+          (-> result
+              (update :body util/try-json-generate)
+              (update :headers #(assoc (or % {}) "Content-Type" "application/json")))
+          (-> result
+              (util/try-json-generate)
+              (response/response)
+              (assoc-in [:headers "Content-Type"] "application/json")))))))
 
 (defn admission-review-response
   "Create a response for an AdmissionReview request."
@@ -139,11 +145,38 @@
   (fn [_]
     (util/try-json-generate (response/response (core/device-inventory ctx)))))
 
+(defn handle-finalize-reservation
+  "Finalize a reservation for a pod based on callback payload."
+  [ctx]
+  (fn [{:keys [namespace name uid reservation-id gpu-uuid] :as payload}]
+    (let [missing (->> [[:namespace namespace]
+                        [:name name]
+                        [:uid uid]
+                        [:reservation-id reservation-id]
+                        [:gpu-uuid gpu-uuid]]
+                       (keep (fn [[k v]] (when (or (nil? v)
+                                                   (and (string? v) (str/blank? v)))
+                                           k))))]
+      (if (seq missing)
+        {:status 400
+         :body   {:error (format "missing required fields: %s"
+                                 (str/join ", " (map name missing)))}}
+        (do (renewer/finalize-reservation!
+             (assoc ctx :claims-namespace (:claims-namespace ctx))
+             {:reservation-id reservation-id
+              :device-id      gpu-uuid
+              :namespace      namespace
+              :uid            uid
+              :name           name})
+            {:status 200 :body {:status "ok"}})))))
+
 (defn api-app [ctx]
   (ring/ring-handler
-   (ring/router [["/mutate" {:post (handle-mutation ctx)
-                             :middleware [json-middleware]}]
-                 ["/devices" {:get (handle-device-inventory ctx)}]]
+   (ring/router [["/mutate"   {:post (handle-mutation ctx)
+                               :middleware [json-middleware]}]
+                 ["/finalize" {:post (handle-finalize-reservation ctx)
+                               :middleware [json-middleware]}]
+                 ["/devices"  {:get (handle-device-inventory ctx)}]]
                 {:data {:middleware [(log-requests-middleware ctx)
                                      (open-fail-middleware ctx)]}})
    (constantly {:status 404 :body "not found"})))
