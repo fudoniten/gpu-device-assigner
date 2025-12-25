@@ -95,9 +95,9 @@
                                :certificate-authority-data (k8s/load-certificate ca-certificate)
                                :token (k8s/load-access-token access-token))
             ctx (ctx/create ::k8s/client client
-                            ::renewer/claims-namespace claims-namespace
-                            ::renewer/renew-interval-ms renew-interval
-                            ::renewer/jitter renew-jitter)
+                            ::ctx/claims-namespace claims-namespace
+                            ::ctx/renew-interval-ms renew-interval
+                            ::ctx/jitter renew-jitter)
             shutdown-signal (promise)]
         (log! :info "starting gpu-device-assigner...")
         (log! :debug "creating shutdown hook...")
