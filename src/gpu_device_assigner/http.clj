@@ -150,9 +150,9 @@
 (defn handle-finalize-reservation
   "Finalize a reservation for a pod based on callback payload."
   [ctx]
-  (fn [{:keys [namespace name uid reservation-id gpu-uuid] :as req}]
+  (fn [{:keys [namespace uid reservation-id gpu-uuid] :as req}]
     (let [missing (->> [[:namespace namespace]
-                        [:name name]
+                        [:name (:name req)]
                         [:uid uid]
                         [:reservation-id reservation-id]
                         [:gpu-uuid gpu-uuid]]
