@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [clojure.pprint :refer [pprint]]
 
+            [gpu-device-assigner.core :as core]
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
             [taoensso.telemere :as log :refer [log!]])
@@ -30,6 +31,76 @@
         deleting? (some? (get-in pod [:metadata :deletionTimestamp]))]
     (and (not deleting?)
          (not (contains? #{:Succeeded :Failed} phase)))))
+
+(defn- annotation-value
+  [annotations k]
+  (or (get annotations k)
+      (get annotations (name k))))
+
+(defn- pod-reservation
+  "Extract reservation metadata from a Pod, if present."
+  [pod]
+  (let [annotations    (get-in pod [:metadata :annotations])
+        reservation-id (annotation-value annotations core/reservation-annotation)
+        device-id      (annotation-value annotations core/gpu-annotation)]
+    (when (and reservation-id device-id)
+      {:reservation-id reservation-id
+       :device-id      device-id
+       :namespace      (get-in pod [:metadata :namespace])
+       :uid            (get-in pod [:metadata :uid])
+       :name           (get-in pod [:metadata :name])})))
+
+(defn- owner-reference
+  [{:keys [uid name]}]
+  (when (and uid name)
+    {:apiVersion "v1"
+     :kind       "Pod"
+     :name       name
+     :uid        uid
+     :controller false
+     :blockOwnerDeletion false}))
+
+(defn finalize-reservation!
+  "Verify a reservation lease is held for this pod and promote it to the pod UID."
+  [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace uid name] :as reservation}]
+  (let [lease-name (core/lease-name device-id)
+        lease      (some-> (k8s/get-lease k8s-client claims-namespace lease-name) :body)
+        holder     (get-in lease [:spec :holderIdentity])]
+    (cond
+      (nil? lease)
+      (log! :debug (format "no lease found for %s while finalizing reservation %s" device-id reservation-id))
+
+      (not= reservation-id holder)
+      (log! :debug (format "lease %s/%s is held by %s, not reservation %s" claims-namespace lease-name holder reservation-id))
+
+      (nil? uid)
+      (log! :debug (format "pod %s/%s missing UID; cannot finalize reservation %s yet" namespace name reservation-id))
+
+      :else
+      (let [existing-owners (get-in lease [:metadata :ownerReferences])
+            owner-ref       (owner-reference reservation)
+            patch           (cond-> {:metadata {:annotations {(name core/reservation-annotation) reservation-id}}
+                                     :spec      {:holderIdentity       uid
+                                                 :leaseDurationSeconds core/default-lease-seconds
+                                                 :acquireTime          (or (get-in lease [:spec :acquireTime])
+                                                                           (time/now-rfc3339-micro))
+                                                 :renewTime            (time/now-rfc3339-micro)}}
+                              (and owner-ref (not-any? #(= (:uid %) uid) existing-owners))
+                              (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))]
+        (k8s/patch-lease k8s-client claims-namespace lease-name patch)
+        (log! :info (format "finalized reservation %s for pod %s/%s on %s"
+                            reservation-id namespace name device-id))))))
+
+(defn finalize-reservations-once!
+  [ctx]
+  (try
+    (let [pods (or (some-> (k8s/get-pods (:k8s-client ctx)) :items) [])]
+      (doseq [pod pods]
+        (when-let [reservation (pod-reservation pod)]
+          (finalize-reservation! ctx reservation))))
+    (catch Exception e
+      (log/error! e (format "error while finalizing reservations: %s" (.getMessage e)))
+      (log! :debug (with-out-str (print-stack-trace e))))))
 
 (defn renew-leases-once!
   "List leases in CLAIMS_NS; renew those whose holder pod is still active."
@@ -91,5 +162,6 @@
     (log! :info (format "lease-renewer scanning leases every ~%dms (±%.0f%%)"
                         interval (* jt 100.0)))
     (while true
+      (finalize-reservations-once! ctx)
       (renew-leases-once! ctx)
       (sleep! (jittered interval)))))

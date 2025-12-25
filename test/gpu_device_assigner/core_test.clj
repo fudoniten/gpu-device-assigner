@@ -2,6 +2,7 @@
   (:require [gpu-device-assigner.core :as core]
             [gpu-device-assigner.http :as http]
             [gpu-device-assigner.k8s-client :as k8s]
+            [gpu-device-assigner.lease-renewer :as renewer]
             [gpu-device-assigner.time :as gtime]
             [gpu-device-assigner.util :as util]
             [clojure.test :refer [deftest is testing run-tests]]))
@@ -24,7 +25,7 @@
 
 (deftest test-handle-mutation
   (testing "Handle valid mutation request"
-    (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1"})]
+    (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1" :reservation-id "res-123"})]
       (let [handle-mutation-fn (http/handle-mutation {})
             request {:kind "AdmissionReview"
                      :request {:uid "123abc"
@@ -38,7 +39,8 @@
         (is (= true (get-in response [:response :allowed])))
         (is (= "JSONPatch" (get-in response [:response :patchType])))
         (is (= "gpu1" (get-in (nth patch-body 1) [:value])))
-        (is (= "/metadata/annotations/fudo.org~1gpu.uuid" (get-in (nth patch-body 1) [:path]))))))
+        (is (= "/metadata/annotations/fudo.org~1gpu.uuid" (get-in (nth patch-body 1) [:path])))
+        (is (= "res-123" (get-in (nth patch-body 3) [:value]))))))
 
   (testing "Handle request with unexpected kind"
     (let [handle-mutation-fn (http/handle-mutation {})
@@ -78,13 +80,13 @@
                                  [:Node :get]  node))))))]
   (testing "Fail if no matching device is found"
     (let [ctx {:k8s-client (mock-k8s-client)}
-          result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.other}})]
+          result (core/assign-device ctx {:pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.other} :reservation-id "res-1"})]
       (is (nil? result))))
 
   (testing "Return nil when leasing fails to claim a device"
     (with-redefs [core/get-all-device-labels (fn [_]
                                               {:gpu1 {:node "node1" :labels #{:fudo.org/gpu.test}}})
-                  core/try-claim-uuid! (fn [_ _ _]
+                  core/try-claim-uuid! (fn [_ _ _ & _]
                                         (throw (ex-info "lease failed" {})))]
       (is (nil? (core/pick-device {:k8s-client (mock-k8s-client)}
                                   "pod-uid"
@@ -103,14 +105,18 @@
                         [:Lease :patch/json-merge] {:status 200}
                         [:Lease :get] {:body {}}))))
           ctx {:k8s-client client :namespace "default" :pod "test-pod"}]
-      (core/try-claim-uuid! ctx :gpu1 "pod-uid")
-      (let [labels (get-in @captured-request [:body :metadata :labels])]
-        (is (= "default" (get labels "fudo.org/pod.namespace"))))))
+      (core/try-claim-uuid! ctx :gpu1 "reservation-uid")
+      (let [labels (get-in @captured-request [:body :metadata :labels])
+            annotations (get-in @captured-request [:body :metadata :annotations])
+            spec (get-in @captured-request [:body :spec])]
+        (is (= "default" (get labels "fudo.org/pod.namespace")))
+        (is (= "reservation-uid" (get annotations "fudo.org/gpu.reservation-id")))
+        (is (= 60 (:leaseDurationSeconds spec))))))
 
   (testing "Succeed when a matching device can be claimed"
-    (with-redefs [core/try-claim-uuid! (fn [_ _ _] true)]
+    (with-redefs [core/try-claim-uuid! (fn [_ _ _ & _] true)]
       (let [ctx {:k8s-client (mock-k8s-client)}
-            result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.test}})]
+            result (core/assign-device ctx {:pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.test} :reservation-id "res-1"})]
         (is (= :gpu1 (:device-id result)))
         (is (= "node1" (:node result))))))
 
@@ -132,9 +138,34 @@
                                     [:Lease :get] {:body lease}
                                     [:Lease :patch/json-merge] {:status 200}
                                     [:Pod :list] {:items []}))))}
-          result (core/assign-device ctx {:node "node1" :pod "test-pod" :namespace "default" :requested-labels #{"label1"} :uid "pod-uid"})]
+          result (core/assign-device ctx {:pod "test-pod" :namespace "default" :requested-labels #{"label1"} :reservation-id "pod-uid"})]
       (is (= :gpu1 (:device-id result)))
       (is (= "node1" (:node result))))))
+
+  (testing "Finalize reservation promotes lease to pod UID"
+    (let [patched (atom nil)
+          lease {:metadata {:name "gpu1"
+                            :annotations {(name core/reservation-annotation) "res-123"}
+                            :labels {"fudo.org/gpu.uuid" "gpu1"}}
+                 :spec {:holderIdentity "res-123"}}
+          client (k8s/->K8SClient
+                  (reify k8s/IK8SBaseClient
+                    (invoke [_ {:keys [kind action request]}]
+                      (case [kind action]
+                        [:Lease :get] {:body lease}
+                        [:Lease :patch/json-merge] (do (reset! patched request)
+                                                       {:status 200})
+                        [:Node :list] {:items []}
+                        [:Pod :list] {:items []}))))
+          ctx {:k8s-client client :claims-namespace "gpu-claims"}]
+      (renewer/finalize-reservation! ctx {:reservation-id "res-123"
+                                          :device-id "gpu1"
+                                          :namespace "default"
+                                          :uid "pod-uid"
+                                          :name "demo"})
+      (is (= "pod-uid" (get-in @patched [:body :spec :holderIdentity])))
+      (is (= core/default-lease-seconds (get-in @patched [:body :spec :leaseDurationSeconds])))
+      (is (= "gpu-claims" (:namespace @patched))))
 
   (testing "Device inventory shows assignments and pod existence"
     (let [leases [{:metadata {:name "gpu1"
