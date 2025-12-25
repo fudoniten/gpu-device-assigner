@@ -275,7 +275,8 @@
         assignments   (->> (k8s/list-leases k8s-client (claims-namespace ctx))
                            :items
                            (keep lease->assignment)
-                           (into {}))]
+                           (into {})
+                           (log/trace! :device/leases))]
     (into {}
           (map (fn [[device {:keys [node labels]}]]
                  (if-let [assignment (get assignments (keyword device))]
