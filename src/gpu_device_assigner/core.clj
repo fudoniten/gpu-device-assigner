@@ -25,13 +25,22 @@
   (get ctx :claims-namespace "gpu-claims"))
 
 (def default-lease-seconds 300)
+(def reservation-lease-seconds 60)
+
+(def gpu-annotation :fudo.org/gpu.uuid)
+(def reservation-annotation :fudo.org/gpu.reservation-id)
 
 (defn format-labels
-  "Comma-separated label names for logging." 
+  "Comma-separated label names for logging."
   [labels]
   (if (seq labels)
     (str/join ", " (map name labels))
     "none"))
+
+(defn annotation-value
+  [annotations k]
+  (or (get annotations k)
+      (get annotations (name k))))
 
 (defn lease-name
   "Format a Kubernetes Lease name from a GPU UUID."
@@ -40,20 +49,25 @@
 
 (defn lease-body
   "Build a Lease object.
-   `opts` may include {:node <node-name> :extra-labels {\"k\":\"v\" ...}}.
+   `opts` may include {:node <node-name>
+                       :extra-labels {\"k\":\"v\" ...}
+                       :lease-duration-seconds <int>
+                       :reservation-id <string>}.
    The client sets :metadata.namespace when POSTing."
-  ([device-uuid pod-uid]
-   (lease-body device-uuid pod-uid {}))
-  ([device-uuid pod-uid {:keys [node extra-labels]}]
+  ([device-uuid holder]
+   (lease-body device-uuid holder {}))
+  ([device-uuid holder {:keys [node extra-labels lease-duration-seconds reservation-id]}]
    {:apiVersion "coordination.k8s.io/v1"
     :kind "Lease"
-    :metadata {:name      (lease-name device-uuid)
-               :namespace nil ;; set by client
-               :labels    (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
-                            node (assoc :fudo.org/gpu.node (name node))
-                            (seq extra-labels) (merge extra-labels))}
-    :spec {:holderIdentity       pod-uid
-           :leaseDurationSeconds default-lease-seconds
+    :metadata {:name        (lease-name device-uuid)
+               :namespace   nil ;; set by client
+               :labels      (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
+                              node (assoc :fudo.org/gpu.node (name node))
+                              (seq extra-labels) (merge extra-labels))
+               :annotations (cond-> {}
+                              reservation-id (assoc (name reservation-annotation) reservation-id))}
+    :spec {:holderIdentity       holder
+           :leaseDurationSeconds (long (or lease-duration-seconds default-lease-seconds))
            :acquireTime          (time/now-rfc3339-micro)
            :renewTime            (time/now-rfc3339-micro)}}))
 
@@ -74,20 +88,22 @@
    - POST Lease -> 201 => win
    - 409 => GET; if expired => PATCH renew+holderIdentity => win
    - else lose"
-  [{:keys [k8s-client namespace pod] :as ctx} device-uuid pod-uid]
+  [{:keys [k8s-client namespace pod] :as ctx} device-uuid holder-identity & {:keys [lease-duration-seconds]}]
   (let [pod-ns namespace
         ns     (claims-namespace ctx)
         nm     (lease-name device-uuid)
-        body   (lease-body device-uuid pod-uid
-                           {:extra-labels {"fudo.org/pod.namespace" pod-ns}})]
+        body   (lease-body device-uuid holder-identity
+                           {:lease-duration-seconds (or lease-duration-seconds reservation-lease-seconds)
+                            :reservation-id         holder-identity
+                            :extra-labels           {"fudo.org/pod.namespace" pod-ns}})]
     (try
       (let [{:keys [status] :as resp} (log/trace! :lease/response
                                                   (k8s/create-lease k8s-client ns nm
                                                                     (log/trace! :lease/request body)))]
         (cond
           (= 201 status)
-          (do (log! :info (format "successfully claimed gpu %s for pod %s"
-                                  device-uuid pod-uid))
+          (do (log! :info (format "successfully claimed gpu %s for reservation %s"
+                                  device-uuid holder-identity))
               true)
 
           (= 409 status)
@@ -97,22 +113,27 @@
                                   (get labels :fudo.org/pod.namespace))
                 holder        (get-in lease [:spec :holderIdentity])
                 holder-exists (when (and pod-ns holder)
-                                (k8s/pod-uid-exists? k8s-client pod-ns holder))]
+                                (k8s/pod-uid-exists? k8s-client pod-ns holder))
+                lease-seconds (long (or lease-duration-seconds reservation-lease-seconds))]
             (if (or (lease-expired? lease)
                     (not holder-exists))
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
-                                                      {:spec {:holderIdentity pod-uid
-                                                              :renewTime (time/now-rfc3339-micro)}})]
-                (log! :info (format "attempting to claim gpu %s for pod %s"
-                                    device-uuid pod-uid))
+                                                      {:metadata {:annotations {(name reservation-annotation) holder-identity}}
+                                                       :spec {:holderIdentity       holder-identity
+                                                              :leaseDurationSeconds lease-seconds
+                                                              :acquireTime          (or (get-in lease [:spec :acquireTime])
+                                                                                        (time/now-rfc3339-micro))
+                                                              :renewTime            (time/now-rfc3339-micro)}})]
+                (log! :info (format "attempting to claim gpu %s for reservation %s"
+                                    device-uuid holder-identity))
                 (<= 200 status 299))
-              (do (log! :info (format "failed to claim gpu %s for pod %s, unexpired lease exists"
-                                      device-uuid pod-uid))
+              (do (log! :info (format "failed to claim gpu %s for reservation %s, unexpired lease exists"
+                                      device-uuid holder-identity))
                   false)))
 
           :else
-          (do (log! :error (format "unexpected error claiming gpu %s for pod %s: %s"
-                                   device-uuid pod-uid (util/pprint-string resp)))
+          (do (log! :error (format "unexpected error claiming gpu %s for reservation %s: %s"
+                                   device-uuid holder-identity (util/pprint-string resp)))
               nil)))
       (catch Throwable e
         (log/error! (str "lease claim error for " (name device-uuid) ": " (.getMessage e)))
@@ -200,14 +221,14 @@
     matching))
 
 (s/fdef pick-device
-  :args (s/cat :ctx      ::context/context
-               :host-uid string?
-               :labels   ::device-labels)
+  :args (s/cat :ctx       ::context/context
+               :holder-id string?
+               :labels    ::device-labels)
   :ret  (s/nilable (s/keys :req-un [::device-id ::node])))
 (defn pick-device
   "Pick the first candidate device whose Lease we can claim atomically.
    Returns {:device-id <uuid> :node <node>} or nil."
-  [ctx pod-uid labels]
+  [ctx holder-identity labels]
   (try
     (let [device-labels (get-all-device-labels ctx)
           pod-name      (str (:namespace ctx) "/" (:pod ctx))
@@ -224,7 +245,7 @@
             (let [result (when-let [order (shuffle (keys matching))]
                            (some (fn [dev-uuid]
                                    (try
-                                     (when (try-claim-uuid! ctx dev-uuid pod-uid)
+                                     (when (try-claim-uuid! ctx dev-uuid holder-identity)
                                        (log! :info
                                              (format "claimed device %s for pod %s on node %s"
                                                      dev-uuid pod-name (-> matching dev-uuid :node)))
@@ -255,15 +276,18 @@
 (defn- lease->assignment
   "Extract the device and pod assignment info from a Lease resource."
   [lease]
-  (let [labels  (get-in lease [:metadata :labels])
-        device  (or (get labels "fudo.org/gpu.uuid")
-                    (get labels :fudo.org/gpu.uuid))
-        pod-ns  (or (get labels "fudo.org/pod.namespace")
-                    (get labels :fudo.org/pod.namespace))
-        pod-uid (get-in lease [:spec :holderIdentity])]
+  (let [labels      (get-in lease [:metadata :labels])
+        annotations (get-in lease [:metadata :annotations])
+        device      (or (get labels "fudo.org/gpu.uuid")
+                        (get labels :fudo.org/gpu.uuid))
+        pod-ns      (or (get labels "fudo.org/pod.namespace")
+                        (get labels :fudo.org/pod.namespace))
+        pod-uid     (get-in lease [:spec :holderIdentity])
+        reservation (annotation-value annotations reservation-annotation)]
     (when device
       [(keyword device)
        {:device-id device
+        :reservation-id reservation
         :pod       {:namespace pod-ns
                     :uid       pod-uid}}])))
 
@@ -279,17 +303,19 @@
     (into {}
           (map (fn [[device {:keys [node labels]}]]
                  (if-let [assignment (get assignments (keyword device))]
-                   (let [pod        (:pod (log/trace! :device/assignment assignment))
-                         pod-detail (when pod
-                                      (log/trace! :device/pod-detail
-                                                  (pod-uid->pod ctx (:namespace pod) (:uid pod))))
-                         exists?    (boolean pod-detail)
-                         pod-info   (when pod
-                                      (cond-> pod
-                                        pod-detail               (assoc :name (get-in pod-detail [:metadata :name]))
-                                        (some? (:namespace pod)) (assoc :namespace (:namespace pod))
-                                        (some? (:uid pod))       (assoc :uid (:uid pod))
-                                        (some? exists?)          (assoc :exists? exists?)))]
+                   (let [pod             (:pod (log/trace! :device/assignment assignment))
+                         reservation-id (:reservation-id assignment)
+                         pod-detail     (when pod
+                                          (log/trace! :device/pod-detail
+                                                      (pod-uid->pod ctx (:namespace pod) (:uid pod))))
+                         exists?        (boolean pod-detail)
+                         pod-info       (when pod
+                                          (cond-> pod
+                                            pod-detail               (assoc :name (get-in pod-detail [:metadata :name]))
+                                            (some? (:namespace pod)) (assoc :namespace (:namespace pod))
+                                            (some? (:uid pod))       (assoc :uid (:uid pod))
+                                            (some? reservation-id)   (assoc :reservation-id reservation-id)
+                                            (some? exists?)          (assoc :exists? exists?)))]
                      [device {:node       node
                               :labels     (-> labels sort vec)
                               :assignment pod-info}])
@@ -298,18 +324,22 @@
 
 (defn assign-device
   "Claim a GPU via Lease and return the JSONPatch-ready info."
-  [ctx {:keys [pod namespace requested-labels uid]}]
+  [ctx {:keys [pod namespace requested-labels reservation-id]}]
   (let [requested-labels (set (map keyword requested-labels))]
-    ;; Make UID available to pick-device -> try-claim-uuid!
+    ;; Make reservation available to pick-device -> try-claim-uuid!
     (if-let [{:keys [device-id node]} (log/trace! :device/selection
                                                   (pick-device (assoc ctx
                                                                       :namespace namespace
                                                                       :pod pod)
-                                                               uid requested-labels))]
+                                                               reservation-id requested-labels))]
       (when device-id
         (log! :info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
                             device-id namespace pod node))
-        {:device-id device-id :pod pod :namespace namespace :node node})
+        {:device-id device-id
+         :pod pod
+         :namespace namespace
+         :node node
+         :reservation-id reservation-id})
       (do (log/error! (format "no free device (by Lease) for pod %s/%s, labels [%s]"
                               namespace pod (format-labels requested-labels)))
           nil))))

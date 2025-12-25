@@ -61,12 +61,13 @@
 
 (defn device-assignment-patch
   "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs."
-  [_ device-id node]
+  [_ device-id node reservation-id]
   (let [patch
         [{:op "add" :path "/metadata/annotations" :value {}}
          ;; Breadcrumbs for ops / GC tools
          {:op "add" :path "/metadata/annotations/fudo.org~1gpu.uuid" :value (name device-id)}
          {:op "add" :path "/metadata/annotations/fudo.org~1gpu.node" :value (name node)}
+         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.reservation-id" :value reservation-id}
          ;; Your CDI assignment (unchanged form)
          {:op "add" :path "/metadata/annotations/cdi.k8s.io~1gpu-assignment"
           :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
@@ -104,7 +105,7 @@
           gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
           remove-assign    (fn [[k _]] (not= k :fudo.org/gpu.assign))
           uid              (get-in req [:request :uid])
-          pod-uid          (core/get-claim-id req)
+          reservation-id   (core/get-claim-id req)
           pod              (or (get-in req [:request :object :metadata :name])
                                (get-in req [:request :object :metadata :generateName]))
           namespace        (get-in req [:request :object :metadata :namespace])
@@ -122,12 +123,12 @@
         (do (log! :info (format "processing pod %s/%s, requesting labels [%s]"
                                 namespace pod (str/join "," (map name requested-labels))))
             (if-let [assigned-device (core/assign-device ctx {:pod              pod
-                                                              :uid              pod-uid
+                                                              :reservation-id   reservation-id
                                                               :namespace        namespace
                                                               :requested-labels requested-labels})]
-              (let [{:keys [device-id node]} assigned-device]
+              (let [{:keys [device-id node reservation-id]} assigned-device]
                 (admission-review-response :uid uid :allowed? true
-                                           :patch (device-assignment-patch ctx device-id node)))
+                                           :patch (device-assignment-patch ctx device-id node reservation-id)))
               (admission-review-response :uid uid :status 429 :allowed? false
                                          :message (format "no GPUs with requested labels free for pod %s/%s"
                                                           namespace pod))))))))
