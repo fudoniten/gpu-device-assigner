@@ -148,15 +148,16 @@
 (defn handle-finalize-reservation
   "Finalize a reservation for a pod based on callback payload."
   [ctx]
-  (fn [{:keys [namespace name uid reservation-id gpu-uuid] :as payload}]
+  (fn [{:keys [namespace name uid reservation-id gpu-uuid] :as req}]
+    (log! :info (util/pprint-string req))
     (let [missing (->> [[:namespace namespace]
                         [:name name]
                         [:uid uid]
                         [:reservation-id reservation-id]
                         [:gpu-uuid gpu-uuid]]
                        (keep (fn [[k v]] (when (or (nil? v)
-                                                   (and (string? v) (str/blank? v)))
-                                           k))))]
+                                                  (and (string? v) (str/blank? v)))
+                                          k))))]
       (if (seq missing)
         {:status 400
          :body   {:error (format "missing required fields: %s"
