@@ -150,28 +150,32 @@
 (defn handle-finalize-reservation
   "Finalize a reservation for a pod based on callback payload."
   [ctx]
-  (fn [{:keys [namespace uid reservation-id gpu-uuid] :as req}]
-    (let [missing (->> [[:namespace namespace]
-                        [:name (:name (log/trace! :reservation/request req))]
-                        [:uid uid]
-                        [:reservation-id reservation-id]
-                        [:gpu-uuid gpu-uuid]]
+  (fn [{:keys [request]}]
+    (let [values (merge (select-keys request [:namespace :name :uid])
+                        (select-keys (get-in request [:object :metadata :annotations])
+                                     [:fudo.org/gpu.reservation-id :cdi.k8s.io/gpu-assignment]))
+          missing (->> values
                        (keep (fn [[k v]] (when (or (nil? v)
                                                   (and (string? v) (str/blank? v)))
                                           k))))]
       (if (seq missing)
-        (do (log! :error (format ":reservation/missing-fields: missing required fields: %s"
+        (do (log! :error (format "AdmissionReview reservation finalization: missing required fields: %s"
                                  (str/join ", " (map name missing))))
-          {:status 400
-           :body   {:error (format "missing required fields: %s"
-                                   (str/join ", " (map name missing)))}})
-        (do (renewer/finalize-reservation!
-             (assoc ctx :claims-namespace (:claims-namespace ctx))
-             {:reservation-id reservation-id
-              :device-id      gpu-uuid
-              :namespace      namespace
-              :uid            uid
-              :name           name})
+            {:status 400
+             :body   {:error (format "missing required fields: %s"
+                                     (str/join ", " (map name missing)))}})
+        (let [{name      :name
+               namespace :namespace
+               uid       :uid
+               reservation-id :fudo.org/gpu.reservation-id
+               gpu-id    :cdi.k8s.io/gpu-assignment} values]
+          (renewer/finalize-reservation!
+           (assoc ctx :claims-namespace (:claims-namespace ctx))
+           {:reservation-id reservation-id
+            :device-id      gpu-id
+            :namespace      namespace
+            :uid            uid
+            :name           name})
             {:status 200 :body {:status "ok"}})))))
 
 (defn api-app [ctx]
