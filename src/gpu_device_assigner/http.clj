@@ -150,26 +150,58 @@
 (defn handle-finalize-reservation
   "Finalize a reservation for a pod based on callback payload."
   [ctx]
-  (fn [{:keys [request]}]
-    (let [values (log/trace! :reservation/data
-                             (merge (select-keys request [:namespace :name :uid])
-                                    (select-keys (get-in request [:object :metadata :annotations])
-                                                 [:fudo.org/gpu.reservation-id :cdi.k8s.io/gpu-assignment])))
-          missing (->> values
-                       (keep (fn [[k v]] (when (or (nil? v)
-                                                  (and (string? v) (str/blank? v)))
-                                          k))))]
-      (if (seq missing)
-        (do (log! :error (format "AdmissionReview reservation finalization: missing required fields: %s"
-                                 (str/join ", " (map name missing))))
-            {:status 400
-             :body   {:error (format "missing required fields: %s"
-                                     (str/join ", " (map name missing)))}})
+  (fn [{:keys [request] :as raw}]
+    (let [payload         (or request raw)
+          annotations     (get-in payload [:object :metadata :annotations])
+          reservation-id  (or (:reservation-id payload)
+                              (core/annotation-value annotations core/reservation-annotation))
+          gpu-uuid        (or (:gpu-uuid payload)
+                              (core/annotation-value annotations core/gpu-annotation))
+          gpu-assignment  (or (:gpu-assignment payload)
+                              (core/annotation-value annotations :cdi.k8s.io/gpu-assignment))
+          admission?      (= "AdmissionReview" (:kind raw))
+          review-uid      (get-in raw [:request :uid])
+          values          (log/trace! :reservation/data
+                                      {:namespace      (or (:namespace payload)
+                                                           (get-in payload [:object :metadata :namespace]))
+                                       :name           (or (:name payload)
+                                                           (get-in payload [:object :metadata :name]))
+                                       :uid            (or (:uid payload)
+                                                           (get-in payload [:object :metadata :uid]))
+                                       :fudo.org/gpu.reservation-id reservation-id
+                                       :gpu-uuid       gpu-uuid
+                                       :gpu-assignment gpu-assignment})
+          missing         (->> (select-keys values [:namespace :name :uid :fudo.org/gpu.reservation-id :gpu-uuid])
+                               (keep (fn [[k v]] (when (or (nil? v)
+                                                          (and (string? v) (str/blank? v)))
+                                                  k))))
+          assignment-mismatch? (and admission?
+                                     (not (and gpu-assignment
+                                               gpu-uuid
+                                               (str/ends-with? gpu-assignment (name gpu-uuid)))))
+          missing-response (fn [msg]
+                             (if admission?
+                               (admission-review-response :uid review-uid :allowed? false
+                                                          :status 400 :message msg)
+                               {:status 400
+                                :body   {:error msg}}))]
+      (cond
+        (seq missing)
+        (let [msg (format "missing required fields: %s" (str/join ", " (map name missing)))]
+          (log! :error (format "AdmissionReview reservation finalization: %s" msg))
+          (missing-response msg))
+
+        assignment-mismatch?
+        (let [msg (format "pod is not using assigned GPU %s (annotation value: %s)"
+                          gpu-uuid (or gpu-assignment "<missing>"))]
+          (log! :error msg)
+          (admission-review-response :uid review-uid :allowed? false :status 400 :message msg))
+
+        :else
         (let [{name      :name
                namespace :namespace
                uid       :uid
-               reservation-id :fudo.org/gpu.reservation-id
-               gpu-id    :cdi.k8s.io/gpu-assignment} values]
+               gpu-id    :gpu-uuid} values]
           (log/trace! :reservation/confirm
                       (renewer/finalize-reservation!
                        (assoc ctx :claims-namespace (:claims-namespace ctx))
@@ -178,7 +210,10 @@
                         :namespace      namespace
                         :uid            uid
                         :name           name}))
-          {:status 200 :body {:status "ok"}})))))
+          (if admission?
+            (admission-review-response :uid review-uid :allowed? true :status 200
+                                       :message "reservation finalized")
+            {:status 200 :body {:status "ok"}}))))))
 
 (defn api-app [ctx]
   (ring/ring-handler

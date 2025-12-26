@@ -37,4 +37,47 @@
                     :namespace "ns"
                     :uid "uid-123"
                     :name "pod"}
+                   (second @finalized))))))))
+
+    (testing "AdmissionReview rejects mismatched GPU assignment"
+      (let [handler (http/json-middleware (http/handle-finalize-reservation ctx))
+            annotations {:fudo.org/gpu.reservation-id "res-1"
+                         :fudo.org/gpu.uuid "GPU-abc"
+                         :cdi.k8s.io/gpu-assignment "nvidia.com/gpu=UUID=GPU-wrong"}
+            request {:kind "AdmissionReview"
+                     :request {:uid "review-1"
+                               :object {:metadata {:namespace "ns"
+                                                   :name "pod"
+                                                   :uid "uid-123"
+                                                   :annotations annotations}}}}
+            {:keys [body]} (handler {:body (json-body request)})
+            parsed (util/parse-json body)]
+        (is (= "AdmissionReview" (:kind parsed)))
+        (is (= false (get-in parsed [:response :allowed])))
+        (is (= 400 (get-in parsed [:response :status :code])))))
+
+    (testing "AdmissionReview succeeds when pod uses assigned GPU"
+      (let [finalized (atom nil)
+            handler (http/json-middleware (http/handle-finalize-reservation ctx))
+            annotations {:fudo.org/gpu.reservation-id "res-1"
+                         :fudo.org/gpu.uuid "GPU-abc"
+                         :cdi.k8s.io/gpu-assignment "nvidia.com/gpu=UUID=GPU-abc"}
+            request {:kind "AdmissionReview"
+                     :request {:uid "review-2"
+                               :object {:metadata {:namespace "ns"
+                                                   :name "pod"
+                                                   :uid "uid-123"
+                                                   :annotations annotations}}}}]
+        (with-redefs [renewer/finalize-reservation!
+                      (fn [passed-ctx reservation]
+                        (reset! finalized [passed-ctx reservation]))]
+          (let [{:keys [body]} (handler {:body (json-body request)})
+                parsed (util/parse-json body)]
+            (is (= true (get-in parsed [:response :allowed])))
+            (is (= ctx (first @finalized)))
+            (is (= {:reservation-id "res-1"
+                    :device-id "GPU-abc"
+                    :namespace "ns"
+                    :uid "uid-123"
+                    :name "pod"}
                    (second @finalized)))))))))
