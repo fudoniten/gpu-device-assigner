@@ -340,6 +340,6 @@
          :namespace namespace
          :node node
          :reservation-id reservation-id})
-      (do (log/error! (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                              namespace pod (format-labels requested-labels)))
+      (do (log! :error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
+                               namespace pod (format-labels requested-labels)))
           nil))))
