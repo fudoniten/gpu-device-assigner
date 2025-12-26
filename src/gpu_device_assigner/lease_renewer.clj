@@ -50,13 +50,13 @@
         holder     (get-in lease [:spec :holderIdentity])]
     (cond
       (nil? lease)
-      (log! :debug (format "no lease found for %s while finalizing reservation %s" device-id reservation-id))
+      (log! :error (format "no lease found for %s while finalizing reservation %s" device-id reservation-id))
 
       (not= reservation-id holder)
-      (log! :debug (format "lease %s/%s is held by %s, not reservation %s" claims-namespace lease-name holder reservation-id))
+      (log! :error (format "lease %s/%s is held by %s, not reservation %s" claims-namespace lease-name holder reservation-id))
 
       (nil? uid)
-      (log! :debug (format "pod %s/%s missing UID; cannot finalize reservation %s yet" namespace name reservation-id))
+      (log! :error (format "pod %s/%s missing UID; cannot finalize reservation %s yet" namespace name reservation-id))
 
       :else
       (let [existing-owners (get-in lease [:metadata :ownerReferences])
@@ -71,7 +71,8 @@
                               (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))]
         (k8s/patch-lease k8s-client claims-namespace lease-name patch)
         (log! :info (format "finalized reservation %s for pod %s/%s on %s"
-                            reservation-id namespace name device-id))))))
+                            reservation-id namespace name device-id))
+        true))))
 
 (defn renew-leases-once!
   "List leases in CLAIMS_NS; renew those whose holder pod is still active."

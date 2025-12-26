@@ -169,14 +169,15 @@
                uid       :uid
                reservation-id :fudo.org/gpu.reservation-id
                gpu-id    :cdi.k8s.io/gpu-assignment} values]
-          (renewer/finalize-reservation!
-           (assoc ctx :claims-namespace (:claims-namespace ctx))
-           {:reservation-id reservation-id
-            :device-id      gpu-id
-            :namespace      namespace
-            :uid            uid
-            :name           name})
-            {:status 200 :body {:status "ok"}})))))
+          (log/trace! :reservation/confirm
+                      (renewer/finalize-reservation!
+                       (assoc ctx :claims-namespace (:claims-namespace ctx))
+                       {:reservation-id reservation-id
+                        :device-id      gpu-id
+                        :namespace      namespace
+                        :uid            uid
+                        :name           name}))
+          {:status 200 :body {:status "ok"}})))))
 
 (defn api-app [ctx]
   (ring/ring-handler
