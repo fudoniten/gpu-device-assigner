@@ -50,7 +50,7 @@
         holder     (get-in lease [:spec :holderIdentity])]
     (cond
       (nil? lease)
-      (log! :error (format "no lease found for %s while finalizing reservation %s" device-id reservation-id))
+      (log! :error (format "no lease %s/%s found for %s while finalizing reservation %s" claims-namespace lease-name device-id reservation-id))
 
       (not= reservation-id holder)
       (log! :error (format "lease %s/%s is held by %s, not reservation %s" claims-namespace lease-name holder reservation-id))
