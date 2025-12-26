@@ -151,9 +151,10 @@
   "Finalize a reservation for a pod based on callback payload."
   [ctx]
   (fn [{:keys [request]}]
-    (let [values (merge (select-keys request [:namespace :name :uid])
-                        (select-keys (get-in request [:object :metadata :annotations])
-                                     [:fudo.org/gpu.reservation-id :cdi.k8s.io/gpu-assignment]))
+    (let [values (log/trace! :reservation/data
+                             (merge (select-keys request [:namespace :name :uid])
+                                    (select-keys (get-in request [:object :metadata :annotations])
+                                                 [:fudo.org/gpu.reservation-id :cdi.k8s.io/gpu-assignment])))
           missing (->> values
                        (keep (fn [[k v]] (when (or (nil? v)
                                                   (and (string? v) (str/blank? v)))
