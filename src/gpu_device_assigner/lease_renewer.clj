@@ -46,7 +46,7 @@
   "Verify a reservation lease is held for this pod and promote it to the pod UID."
   [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace uid name] :as reservation}]
   (let [lease-name (core/lease-name device-id)
-        lease      (some-> (k8s/get-lease k8s-client claims-namespace lease-name) :body)
+        lease      (log/trace! :lease/body (some-> (log/trace! :lease/result (k8s/get-lease k8s-client claims-namespace lease-name)) :body))
         holder     (get-in lease [:spec :holderIdentity])]
     (cond
       (nil? lease)
