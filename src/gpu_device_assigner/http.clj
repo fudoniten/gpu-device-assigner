@@ -152,7 +152,7 @@
   [ctx]
   (fn [{:keys [namespace uid reservation-id gpu-uuid] :as req}]
     (let [missing (->> [[:namespace namespace]
-                        [:name (:name req)]
+                        [:name (:name (log/trace! :reservation/request req))]
                         [:uid uid]
                         [:reservation-id reservation-id]
                         [:gpu-uuid gpu-uuid]]
@@ -160,9 +160,11 @@
                                                   (and (string? v) (str/blank? v)))
                                           k))))]
       (if (seq missing)
-        {:status 400
-         :body   {:error (format "missing required fields: %s"
-                                 (str/join ", " (map name missing)))}}
+        (do (log! :error (format ":reservation/missing-fields: missing required fields: %s"
+                                 (str/join ", " (map name missing))))
+          {:status 400
+           :body   {:error (format "missing required fields: %s"
+                                   (str/join ", " (map name missing)))}})
         (do (renewer/finalize-reservation!
              (assoc ctx :claims-namespace (:claims-namespace ctx))
              {:reservation-id reservation-id
