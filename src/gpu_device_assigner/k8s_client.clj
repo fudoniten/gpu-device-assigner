@@ -155,7 +155,7 @@
       (some (fn [pod]
               (when (= (get-in (log/trace! :k8s/ns-pod pod) [:metadata :uid]) uid)
                 (log/trace! :k8s/pod-by-uid-returned pod)))
-            (log/trace! :k8s/ns-pods (get-namespace-pods self namespace)))))
+            (log/trace! :k8s/ns-pods (-> (get-namespace-pods self namespace) :items)))))
 
 (defn base64-string?
   "Check if a string is a valid Base64 encoded string."
