@@ -277,23 +277,26 @@
      (into [:tbody] rows)]))
 
 (defn- device-status-page [ctx]
-  (let [inventory (core/device-inventory ctx)
+  (let [device-pod (fn [{{pod-uid :pod-uid namespace :namespace} :pod}]
+                     (core/pod-uid->pod ctx namespace pod-uid))
+        inventory (map (fn [device] (assoc device :pod (device-pod device)))
+                       (core/device-inventory ctx))
         table     (render-device-table inventory)
         body      (str
-                     (h/html
-                      [:html
-                       [:head
-                       [:title "GPU Device Assignment"]
-                        [:style (str "body{font-family:Arial,Helvetica,sans-serif;margin:2rem;}"
-                                     "table{border-collapse:collapse;width:100%;}"
-                                     "th,td{border:1px solid #ddd;padding:8px;text-align:left;}"
-                                     "th{background:#f5f5f5;}")]]
-                       [:body
-                        [:h1 "GPU Device Assigner"]
-                        [:p "Current device assignments. API JSON available at "
-                         [:code "/devices"]
-                         " on the API port."]
-                        table]]))]
+                   (h/html
+                       [:html
+                        [:head
+                         [:title "GPU Device Assignment"]
+                         [:style (str "body{font-family:Arial,Helvetica,sans-serif;margin:2rem;}"
+                                      "table{border-collapse:collapse;width:100%;}"
+                                      "th,td{border:1px solid #ddd;padding:8px;text-align:left;}"
+                                      "th{background:#f5f5f5;}")]]
+                        [:body
+                         [:h1 "GPU Device Assigner"]
+                         [:p "Current device assignments. API JSON available at "
+                          [:code "/devices"]
+                          " on the API port."]
+                         table]]))]
     (-> (response/response body)
         (assoc-in [:headers "Content-Type"] "text/html;charset=utf-8"))))
 

@@ -68,6 +68,7 @@
                                                  :acquireTime          (or (get-in lease [:spec :acquireTime])
                                                                            (time/now-rfc3339-micro))
                                                  :renewTime            (time/now-rfc3339-micro)}}
+                              ;; TODO: dafuq is this doing?
                               (and owner-ref (not-any? #(= (:uid %) uid) existing-owners))
                               (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))
             {:keys [status] :as res} (k8s/patch-lease k8s-client claims-namespace lease-name patch)]

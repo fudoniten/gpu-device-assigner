@@ -303,7 +303,7 @@
     (into {}
           (map (fn [[device {:keys [node labels]}]]
                  (if-let [assignment (get assignments (keyword device))]
-                   (let [pod             (:pod (log/trace! :device/assignment assignment))
+                   (let [pod            (:pod (log/trace! :device/assignment assignment))
                          reservation-id (:reservation-id assignment)
                          pod-detail     (when pod
                                           (log/trace! :device/pod-detail
