@@ -7,7 +7,8 @@
             [gpu-device-assigner.core :as core]
             [gpu-device-assigner.k8s-client :as k8s]
             [gpu-device-assigner.time :as time]
-            [taoensso.telemere :as log :refer [log!]])
+            [taoensso.telemere :as log :refer [log!]]
+            [gpu-device-assigner.util :as util])
   (:import java.time.OffsetDateTime))
 
 (s/def ::claims-namespace string?)
@@ -68,11 +69,14 @@
                                                                            (time/now-rfc3339-micro))
                                                  :renewTime            (time/now-rfc3339-micro)}}
                               (and owner-ref (not-any? #(= (:uid %) uid) existing-owners))
-                              (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))]
-        (k8s/patch-lease k8s-client claims-namespace lease-name patch)
-        (log! :info (format "finalized reservation %s for pod %s/%s on %s"
-                            reservation-id namespace (:name reservation) device-id))
-        true))))
+                              (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))
+            {:keys [status] :as res} (k8s/patch-lease k8s-client claims-namespace lease-name patch)]
+        (if (<= 200 status 299)
+          (log! :info (format "finalized reservation %s for pod %s/%s on %s"
+                              reservation-id namespace (:name reservation) device-id))
+          (log! :error (format "failed to finalize reservation %s for pod %s/%s on %s: %s"
+                               reservation-id namespace (:name reservation) device-id (util/pprint-string res))))
+        status))))
 
 (defn renew-leases-once!
   "List leases in CLAIMS_NS; renew those whose holder pod is still active."
