@@ -269,9 +269,7 @@
   "Lookup a pod by UID within the provided namespace."
   [{:keys [k8s-client]} namespace pod-uid]
   (when (and namespace pod-uid)
-    (log/trace! :device/pod-by-uid
-                (k8s/get-pod-by-uid k8s-client namespace
-                                    (log/trace! :device/pod-uid pod-uid)))))
+    (k8s/get-pod-by-uid k8s-client namespace pod-uid)))
 
 (defn- lease->assignment
   "Extract the device and pod assignment info from a Lease resource."

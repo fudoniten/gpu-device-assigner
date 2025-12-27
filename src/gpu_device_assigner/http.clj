@@ -277,10 +277,7 @@
      (into [:tbody] rows)]))
 
 (defn- device-status-page [ctx]
-  (let [device-pod (fn [{{pod-uid :pod-uid namespace :namespace} :pod}]
-                     (core/pod-uid->pod ctx namespace pod-uid))
-        inventory (map (fn [device] (assoc device :pod (device-pod (log/trace! :http/device device))))
-                       (core/device-inventory ctx))
+  (let [inventory (core/device-inventory ctx)
         table     (render-device-table inventory)
         body      (str
                    (h/html
