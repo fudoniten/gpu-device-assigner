@@ -71,10 +71,10 @@
                :namespace   nil ;; set by client
                :labels      (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
                               node (assoc :fudo.org/gpu.node (name node))
-                              reservation-id (assoc (name reservation-state-label) proposed-reservation)
+                              reservation-id (assoc reservation-state-label proposed-reservation)
                               (seq extra-labels) (merge extra-labels))
                :annotations (cond-> {}
-                              reservation-id (assoc (name reservation-annotation) reservation-id))}
+                              reservation-id (assoc reservation-annotation reservation-id))}
     :spec {:holderIdentity       holder
            :leaseDurationSeconds (long (or lease-duration-seconds default-lease-seconds))
            :acquireTime          (time/now-rfc3339-micro)
@@ -103,7 +103,7 @@
         nm     (lease-name device-uuid)
         body   (lease-body device-uuid holder-identity
                            {:lease-duration-seconds (or lease-duration-seconds reservation-lease-seconds)
-                            :reservation-id         holder-identity
+                            reservation-annotation  holder-identity
                             :extra-labels           {"fudo.org/pod.namespace" pod-ns}})]
     (try
       (let [{:keys [status] :as resp} (log/trace! :lease/response
@@ -124,7 +124,7 @@
                 holder-exists (when (and pod-ns holder)
                                 (k8s/pod-uid-exists? k8s-client pod-ns holder))
                 lease-seconds (long (or lease-duration-seconds reservation-lease-seconds))
-                updated-labels (assoc labels (name reservation-state-label) proposed-reservation)]
+                updated-labels (assoc labels reservation-state-label proposed-reservation)]
             (if (or (lease-expired? lease)
                     (not holder-exists))
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
