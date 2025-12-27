@@ -136,13 +136,17 @@
                          :namespace namespace}}))
 
     (patch-lease [_ namespace name merge-patch]
-      ;; Use JSON Merge Patch for Leases (spec.renewTime / holderIdentity, etc.)
-      (invoke client
-              {:kind    :Lease
-               :action  :patch/json-merge
-               :request {:name      name
-                         :namespace namespace
-                         :body      merge-patch}}))
+      ;; Accept either a JSONMergePatch map or a JSONPatch string.
+      (let [patch-req {:name      name
+                       :namespace namespace
+                       :body      merge-patch}
+            action    (if (string? merge-patch)
+                        :patch/json
+                        :patch/json-merge)]
+        (invoke client
+                {:kind    :Lease
+                 :action  action
+                 :request patch-req})))
 
     (list-leases [_ namespace]
       (invoke client

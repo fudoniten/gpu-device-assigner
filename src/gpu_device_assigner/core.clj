@@ -92,6 +92,25 @@
       ;; No renew time in lease
       true)))
 
+(defn lease-claim-patch
+  "Construct a JSONPatch for claiming or renewing a Lease.
+
+  Mirrors the JSONPatch structure used in `http/device-assignment-patch` for
+  compatibility with Kubernetes patch expectations."
+  [lease holder-identity lease-seconds updated-labels]
+  (let [annotations (merge (get-in lease [:metadata :annotations])
+                           {(name reservation-annotation) holder-identity})
+        patch       [{:op "add" :path "/metadata/labels" :value updated-labels}
+                     {:op "add" :path "/metadata/annotations" :value annotations}
+                     {:op "add" :path "/spec/holderIdentity" :value holder-identity}
+                     {:op "add" :path "/spec/leaseDurationSeconds" :value lease-seconds}
+                     {:op "add" :path "/spec/acquireTime"
+                      :value (or (get-in lease [:spec :acquireTime])
+                                 (time/now-rfc3339-micro))}
+                     {:op "add" :path "/spec/renewTime" :value (time/now-rfc3339-micro)}]]
+    (log/trace! (str "\n##########\n# LEASE PATCH\n##########\n\n" (util/pprint-string patch)))
+    (util/try-json-generate patch)))
+
 (defn try-claim-uuid!
   "Atmoic claim attempt:
    - POST Lease -> 201 => win
@@ -127,14 +146,8 @@
                 updated-labels (assoc labels (util/full-name reservation-state-label) proposed-reservation)]
             (if (or (lease-expired? lease)
                     (not holder-exists))
-              (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
-                                                      {:metadata {:labels      updated-labels
-                                                                  :annotations {(name reservation-annotation) holder-identity}}
-                                                       :spec {:holderIdentity       holder-identity
-                                                              :leaseDurationSeconds lease-seconds
-                                                              :acquireTime          (or (get-in lease [:spec :acquireTime])
-                                                                                        (time/now-rfc3339-micro))
-                                                              :renewTime            (time/now-rfc3339-micro)}})]
+              (let [patch-json (lease-claim-patch lease holder-identity lease-seconds updated-labels)
+                    {:keys [status]} (k8s/patch-lease k8s-client ns nm patch-json)]
                 (log! :info (format "attempting to claim gpu %s for reservation %s"
                                     device-uuid holder-identity))
                 (<= 200 status 299))
