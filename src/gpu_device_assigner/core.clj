@@ -110,7 +110,7 @@
                                                   (k8s/create-lease k8s-client ns nm
                                                                     (log/trace! :lease/request body)))]
         (cond
-          (= 201 status)
+          (<= 200 status 299)
           (do (log! :info (format "successfully claimed gpu %s for reservation %s"
                                   device-uuid holder-identity))
               true)
