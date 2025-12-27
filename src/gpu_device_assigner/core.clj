@@ -34,6 +34,9 @@
 
 (def gpu-annotation :fudo.org/gpu.uuid)
 (def reservation-annotation :fudo.org/gpu.reservation-id)
+(def reservation-state-label :fudo.org/gpu.reservation-state)
+(def proposed-reservation "proposal")
+(def active-reservation   "active")
 
 (defn format-labels
   "Comma-separated label names for logging."
@@ -68,6 +71,7 @@
                :namespace   nil ;; set by client
                :labels      (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
                               node (assoc :fudo.org/gpu.node (name node))
+                              reservation-id (assoc (name reservation-state-label) proposed-reservation)
                               (seq extra-labels) (merge extra-labels))
                :annotations (cond-> {}
                               reservation-id (assoc (name reservation-annotation) reservation-id))}
@@ -119,11 +123,13 @@
                 holder        (get-in lease [:spec :holderIdentity])
                 holder-exists (when (and pod-ns holder)
                                 (k8s/pod-uid-exists? k8s-client pod-ns holder))
-                lease-seconds (long (or lease-duration-seconds reservation-lease-seconds))]
+                lease-seconds (long (or lease-duration-seconds reservation-lease-seconds))
+                updated-labels (assoc labels (name reservation-state-label) proposed-reservation)]
             (if (or (lease-expired? lease)
                     (not holder-exists))
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
-                                                      {:metadata {:annotations {(name reservation-annotation) holder-identity}}
+                                                      {:metadata {:labels      updated-labels
+                                                                  :annotations {(name reservation-annotation) holder-identity}}
                                                        :spec {:holderIdentity       holder-identity
                                                               :leaseDurationSeconds lease-seconds
                                                               :acquireTime          (or (get-in lease [:spec :acquireTime])

@@ -48,7 +48,8 @@
   [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace uid] :as reservation}]
   (let [lease-name (core/lease-name device-id)
         lease      (log/trace! :lease/result (k8s/get-lease k8s-client claims-namespace lease-name))
-        holder     (get-in lease [:spec :holderIdentity])]
+        holder     (get-in lease [:spec :holderIdentity])
+        labels     (get-in lease [:metadata :labels])]
     (cond
       (nil? lease)
       (log! :error (format "no lease %s/%s found for %s while finalizing reservation %s" claims-namespace lease-name device-id reservation-id))
@@ -62,7 +63,9 @@
       :else
       (let [existing-owners (get-in lease [:metadata :ownerReferences])
             owner-ref       (owner-reference reservation)
-            patch           (cond-> {:metadata {:annotations {(name core/reservation-annotation) reservation-id}}
+            updated-labels  (assoc labels (name core/reservation-state-label) core/active-reservation)
+            patch           (cond-> {:metadata {:labels      updated-labels
+                                                :annotations {(name core/reservation-annotation) reservation-id}}
                                      :spec      {:holderIdentity       uid
                                                  :leaseDurationSeconds core/default-lease-seconds
                                                  :acquireTime          (or (get-in lease [:spec :acquireTime])
@@ -91,13 +94,19 @@
                          :items)]
       (doseq [lease leases]
         (log/trace! (format "LEASE: %s" (with-out-str (pprint lease))))
-        (let [ln     (get-in lease [:metadata :name])
-              pod-ns (or (get-in lease [:metadata :labels :fudo.org/pod.namespace])
-                         (get-in lease [:metadata :labels "fudo.org/pod.namespace"]))
-              uid    (get-in lease [:spec :holderIdentity])]
+        (let [ln        (get-in lease [:metadata :name])
+              pod-ns    (or (get-in lease [:metadata :labels :fudo.org/pod.namespace])
+                            (get-in lease [:metadata :labels "fudo.org/pod.namespace"]))
+              state     (or (get-in lease [:metadata :labels (name core/reservation-state-label)])
+                            (get-in lease [:metadata :labels core/reservation-state-label]))
+              uid       (get-in lease [:spec :holderIdentity])]
           (cond
             (or (nil? uid) (empty? uid))
             (log! :debug (format "lease %s/%s has no holderIdentity; skipping"
+                                 claims-namespace ln))
+
+            (= state core/proposed-reservation)
+            (log! :debug (format "lease %s/%s marked as proposal; skipping pod lookup until finalized"
                                  claims-namespace ln))
 
             (str/blank? pod-ns)
