@@ -153,9 +153,11 @@
     (get-pod-by-uid [self namespace uid]
       ;; fieldSelector works cluster-wide when you hit /api/v1/pods at the root
       (some (fn [pod]
-              (when (= (get-in (log/trace! :k8s/ns-pod pod) [:metadata :uid]) uid)
+              (log! :info (format ":k8s/pod-by-uid comparing %s == %s"
+                                  uid (get-in pod [:metadata :uid])))
+              (when (= (get-in pod [:metadata :uid]) uid)
                 (log/trace! :k8s/pod-by-uid-returned pod)))
-            (log/trace! :k8s/ns-pods (-> (get-namespace-pods self namespace) :items)))))
+            (-> (get-namespace-pods self namespace) :items))))
 
 (defn base64-string?
   "Check if a string is a valid Base64 encoded string."
