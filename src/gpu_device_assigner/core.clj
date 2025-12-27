@@ -14,7 +14,12 @@
 ;;;; ==== Lease helpers
 
 (defn get-claim-id
-  "Extract the AdmissionReview request UID for the pod being mutated."
+  "Extract the identifier used for the initial reservation.
+
+  When pods are first created they do not yet have a stable pod UID, so we
+  fall back to the AdmissionReview request UID. This value becomes the initial
+  lease `holderIdentity` and is written to `fudo.org/gpu.reservation-id` so it
+  can later be promoted to the real pod UID during reservation finalization."
   [req]
   (or (get-in (log/trace! :admission/request req) [:request :object :metadata :uid])
       (get-in req [:request :uid])))

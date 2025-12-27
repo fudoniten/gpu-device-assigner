@@ -66,8 +66,11 @@
                                      :spec      {:holderIdentity       uid
                                                  :leaseDurationSeconds core/default-lease-seconds
                                                  :acquireTime          (or (get-in lease [:spec :acquireTime])
-                                                                           (time/now-rfc3339-micro))
+                                                                          (time/now-rfc3339-micro))
                                                  :renewTime            (time/now-rfc3339-micro)}}
+                              ;; The lease `holderIdentity` starts as the admission request UID, so
+                              ;; finalization is the first point where we can swap in the stable pod
+                              ;; UID and establish an owner reference.
                               ;; TODO: dafuq is this doing?
                               (and owner-ref (not-any? #(= (:uid %) uid) existing-owners))
                               (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))
