@@ -44,7 +44,7 @@
 
 (defn finalize-reservation!
   "Verify a reservation lease is held for this pod and promote it to the pod UID."
-  [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace uid name] :as reservation}]
+  [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace uid] :as reservation}]
   (let [lease-name (core/lease-name device-id)
         lease      (log/trace! :lease/result (k8s/get-lease k8s-client claims-namespace lease-name))
         holder     (get-in lease [:spec :holderIdentity])]
@@ -71,7 +71,7 @@
                               (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))]
         (k8s/patch-lease k8s-client claims-namespace lease-name patch)
         (log! :info (format "finalized reservation %s for pod %s/%s on %s"
-                            reservation-id namespace name device-id))
+                            reservation-id namespace (:name reservation) device-id))
         true))))
 
 (defn renew-leases-once!
