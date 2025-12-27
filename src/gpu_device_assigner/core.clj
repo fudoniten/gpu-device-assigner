@@ -292,9 +292,11 @@
         pod-ns      (or (get labels "fudo.org/pod.namespace")
                         (get labels :fudo.org/pod.namespace))
         reservation (annotation-value annotations reservation-annotation)
-        state       (or (get labels (name reservation-state-label))
-                        (get labels reservation-state-label))
-        pod-uid     (get-in lease [:spec :holderIdentity])]
+        state       (or (get labels reservation-state-label)
+                        (get labels (name reservation-state-label)))
+        pod-uid     (if (= proposed-reservation state)
+                      nil
+                      (get-in lease [:spec :holderIdentity]))]
     (when device
       [(keyword device)
        {:device-id      device
@@ -315,10 +317,10 @@
     (into {}
           (map (fn [[device {:keys [node labels]}]]
                  (if-let [assignment (get assignments (keyword device))]
-                   (let [pod            (:pod (log/trace! :device/assignment assignment))
-                         reservation-id (:reservation-id assignment)
+                   (let [reservation-id (:reservation-id assignment)
                          state          (:state assignment)
-                         pod-detail     (when pod
+                         pod            (:pod (log/trace! :device/assignment assignment))
+                         pod-detail     (when (and pod (= active-reservation (:status assignment)))
                                           (log/trace! :device/pod-detail
                                                       (pod-uid->pod ctx (:namespace pod) (:uid pod))))
                          exists?        (boolean pod-detail)

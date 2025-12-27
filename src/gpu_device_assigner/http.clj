@@ -244,7 +244,7 @@
         status    (cond
                     (nil? assignment) "available"
                     (= state core/proposed-reservation) "pending"
-                    (true? exists?)   "assigned (pod exists)"
+                    (true? exists?)   "assigned"
                     (false? exists?)  "expired"
                     :else "assigned")]
       (try
