@@ -240,8 +240,10 @@
                     (let [{:keys [namespace uid name]} assignment]
                       (str namespace "/" (or name uid))))
         exists?   (:exists? assignment)
+        state     (:state assignment)
         status    (cond
                     (nil? assignment) "available"
+                    (= state core/proposed-reservation) "pending"
                     (true? exists?)   "assigned (pod exists)"
                     (false? exists?)  "expired"
                     :else "assigned")]

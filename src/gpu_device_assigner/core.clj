@@ -291,14 +291,17 @@
                         (get labels :fudo.org/gpu.uuid))
         pod-ns      (or (get labels "fudo.org/pod.namespace")
                         (get labels :fudo.org/pod.namespace))
-        pod-uid     (get-in lease [:spec :holderIdentity])
-        reservation (annotation-value annotations reservation-annotation)]
+        reservation (annotation-value annotations reservation-annotation)
+        state       (or (get labels (name reservation-state-label))
+                        (get labels reservation-state-label))
+        pod-uid     (get-in lease [:spec :holderIdentity])]
     (when device
       [(keyword device)
-       {:device-id device
+       {:device-id      device
         :reservation-id reservation
-        :pod       {:namespace pod-ns
-                    :uid       pod-uid}}])))
+        :state          state
+        :pod            {:namespace pod-ns
+                         :uid       pod-uid}}])))
 
 (defn device-inventory
   "Return a map of discovered devices and their current assignments.
@@ -314,17 +317,16 @@
                  (if-let [assignment (get assignments (keyword device))]
                    (let [pod            (:pod (log/trace! :device/assignment assignment))
                          reservation-id (:reservation-id assignment)
+                         state          (:state assignment)
                          pod-detail     (when pod
                                           (log/trace! :device/pod-detail
                                                       (pod-uid->pod ctx (:namespace pod) (:uid pod))))
                          exists?        (boolean pod-detail)
-                         pod-info       (when pod
-                                          (cond-> pod
-                                            pod-detail               (assoc :name (get-in pod-detail [:metadata :name]))
-                                            (some? (:namespace pod)) (assoc :namespace (:namespace pod))
-                                            (some? (:uid pod))       (assoc :uid (:uid pod))
-                                            (some? reservation-id)   (assoc :reservation-id reservation-id)
-                                            (some? exists?)          (assoc :exists? exists?)))]
+                         pod-info       (cond-> {:exists? exists?}
+                                          pod              (merge pod)
+                                          pod-detail       (assoc :name (get-in pod-detail [:metadata :name]))
+                                          (some? reservation-id) (assoc :reservation-id reservation-id)
+                                          (some? state)    (assoc :state state))]
                      [device {:node       node
                               :labels     (-> labels sort vec)
                               :assignment pod-info}])
