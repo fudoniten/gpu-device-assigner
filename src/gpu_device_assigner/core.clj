@@ -71,7 +71,7 @@
                :namespace   nil ;; set by client
                :labels      (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
                               node (assoc :fudo.org/gpu.node (name node))
-                              reservation-id (assoc reservation-state-label proposed-reservation)
+                              reservation-id (assoc (util/full-name reservation-state-label) proposed-reservation)
                               (seq extra-labels) (merge extra-labels))
                :annotations (cond-> {}
                               reservation-id (assoc reservation-annotation reservation-id))}
@@ -124,7 +124,7 @@
                 holder-exists (when (and pod-ns holder)
                                 (k8s/pod-uid-exists? k8s-client pod-ns holder))
                 lease-seconds (long (or lease-duration-seconds reservation-lease-seconds))
-                updated-labels (assoc labels reservation-state-label proposed-reservation)]
+                updated-labels (assoc labels (util/full-name reservation-state-label) proposed-reservation)]
             (if (or (lease-expired? lease)
                     (not holder-exists))
               (let [{:keys [status]} (k8s/patch-lease k8s-client ns nm
@@ -293,7 +293,7 @@
                         (get labels :fudo.org/pod.namespace))
         reservation (annotation-value annotations reservation-annotation)
         state       (or (get labels reservation-state-label)
-                        (get labels (name reservation-state-label)))
+                        (get labels (util/full-name reservation-state-label)))
         pod-uid     (if (= proposed-reservation state)
                       nil
                       (get-in lease [:spec :holderIdentity]))]

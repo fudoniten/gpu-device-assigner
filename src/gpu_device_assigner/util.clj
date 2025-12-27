@@ -74,3 +74,9 @@
   "Parse a JSON string into a Clojure data structure."
   [str]
   (json/parse-string str true))
+
+(defn full-name
+  [k]
+  (if-let [ns (namespace k)]
+    (format "%s/%s" ns (name k))
+    (name k)))
