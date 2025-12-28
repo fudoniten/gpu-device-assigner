@@ -45,7 +45,7 @@
 
 (defn finalize-reservation!
   "Verify a reservation lease is held for this pod and promote it to the pod UID."
-  [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace uid] :as reservation}]
+  [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace pod-uid] :as reservation}]
   (let [lease-name (core/lease-name device-id)
         lease      (log/trace! :lease/result (k8s/get-lease k8s-client claims-namespace lease-name))
         holder     (get-in lease [:spec :holderIdentity])
@@ -57,25 +57,24 @@
       (not= reservation-id holder)
       (log! :error (format "lease %s/%s is held by %s, not reservation %s" claims-namespace lease-name holder reservation-id))
 
-      (nil? uid)
+      (nil? pod-uid)
       (log! :error (format "pod %s/%s missing UID; cannot finalize reservation %s yet" namespace name reservation-id))
 
       :else
       (let [existing-owners (get-in lease [:metadata :ownerReferences])
             owner-ref       (owner-reference reservation)
-            updated-labels  (assoc labels (name core/reservation-state-label) core/active-reservation)
+            updated-labels  (assoc labels core/reservation-state-label core/active-reservation)
             patch           (cond-> {:metadata {:labels      updated-labels
-                                                :annotations {(name core/reservation-annotation) reservation-id}}
-                                     :spec      {:holderIdentity       uid
+                                                :annotations {core/reservation-annotation reservation-id}}
+                                     :spec      {:holderIdentity       pod-uid
                                                  :leaseDurationSeconds core/default-lease-seconds
                                                  :acquireTime          (or (get-in lease [:spec :acquireTime])
-                                                                          (time/now-rfc3339-micro))
+                                                                           (time/now-rfc3339-micro))
                                                  :renewTime            (time/now-rfc3339-micro)}}
                               ;; The lease `holderIdentity` starts as the admission request UID, so
                               ;; finalization is the first point where we can swap in the stable pod
                               ;; UID and establish an owner reference.
-                              ;; TODO: dafuq is this doing?
-                              (and owner-ref (not-any? #(= (:uid %) uid) existing-owners))
+                              (and owner-ref (not-any? #(= (:uid %) pod-uid) existing-owners))
                               (assoc-in [:metadata :ownerReferences] (conj (vec existing-owners) owner-ref)))
             {:keys [status] :as res} (k8s/patch-lease k8s-client claims-namespace lease-name patch)]
         (if (<= 200 status 299)

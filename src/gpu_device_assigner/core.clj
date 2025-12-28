@@ -70,9 +70,9 @@
     :metadata {:name        (lease-name device-uuid)
                :namespace   nil ;; set by client
                :labels      (cond-> {:fudo.org/gpu.uuid (name device-uuid)}
-                              node (assoc :fudo.org/gpu.node (name node))
-                              reservation-id (assoc (util/full-name reservation-state-label) proposed-reservation)
-                              (seq extra-labels) (merge extra-labels))
+                              node                   (assoc :fudo.org/gpu.node (name node))
+                              reservation-id         (assoc (util/full-name reservation-state-label) proposed-reservation)
+                              (seq extra-labels)     (merge extra-labels))
                :annotations (cond-> {}
                               reservation-id (assoc reservation-annotation reservation-id))}
     :spec {:holderIdentity       holder
@@ -122,7 +122,7 @@
         nm     (lease-name device-uuid)
         body   (lease-body device-uuid holder-identity
                            {:lease-duration-seconds (or lease-duration-seconds reservation-lease-seconds)
-                            reservation-annotation  holder-identity
+                            :reservation-id         holder-identity
                             :extra-labels           {"fudo.org/pod.namespace" pod-ns}})]
     (try
       (let [{:keys [status] :as resp} (log/trace! :lease/response

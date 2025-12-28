@@ -162,16 +162,13 @@
           admission?      (= "AdmissionReview" (:kind raw))
           review-uid      (get-in raw [:request :uid])
           values          (log/trace! :reservation/data
-                                      {:namespace      (or (:namespace payload)
-                                                           (get-in payload [:object :metadata :namespace]))
-                                       :name           (or (:name payload)
-                                                           (get-in payload [:object :metadata :name]))
-                                       :uid            (or (:uid payload)
-                                                           (get-in payload [:object :metadata :uid]))
-                                       :fudo.org/gpu.reservation-id reservation-id
+                                      {:namespace      (get-in payload [:object :metadata :namespace])
+                                       :name           (get-in payload [:object :metadata :name])
+                                       :pod-uid        (get-in payload [:object :metadata :uid])
+                                       core/reservation-annotation reservation-id
                                        :gpu-uuid       gpu-uuid
                                        :gpu-assignment gpu-assignment})
-          missing         (->> (select-keys values [:namespace :name :uid :fudo.org/gpu.reservation-id :gpu-uuid])
+          missing         (->> (select-keys values [:namespace :name :uid core/reservation-annotation :gpu-uuid])
                                (keep (fn [[k v]] (when (or (nil? v)
                                                           (and (string? v) (str/blank? v)))
                                                   k))))
@@ -200,7 +197,7 @@
         :else
         (let [{name      :name
                namespace :namespace
-               uid       :uid
+               pod-uid   :pod-uid
                gpu-id    :gpu-uuid} values]
           (log/trace! :reservation/confirm
                       (renewer/finalize-reservation!
@@ -208,7 +205,7 @@
                        {:reservation-id reservation-id
                         :device-id      gpu-id
                         :namespace      namespace
-                        :uid            uid
+                        :pod-uid        pod-uid
                         :name           name}))
           (if admission?
             (admission-review-response :uid review-uid :allowed? true :status 200
