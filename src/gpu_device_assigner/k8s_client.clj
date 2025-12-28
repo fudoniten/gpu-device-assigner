@@ -42,6 +42,7 @@
   (create-lease       [self namespace name lease-body])
   (get-lease          [self namespace name])
   (patch-lease        [self namespace name merge-path])
+  (delete-lease       [self namespace name])
   (list-leases        [self namespace])
 
   (get-pod-by-uid     [self namespace uid])
@@ -147,6 +148,13 @@
                 {:kind    :Lease
                  :action  action
                  :request patch-req})))
+
+    (delete-lease [_ namespace name]
+      (invoke client
+              {:kind    :Lease
+               :action  :delete
+               :request {:name      name
+                         :namespace namespace}}))
 
     (list-leases [_ namespace]
       (invoke client

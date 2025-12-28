@@ -40,36 +40,15 @@ The application requires several configuration parameters, which can be provided
 - `--log-level`: Level at which to log output (default: `warn`).
 The service starts both an API listener (for AdmissionReview and JSON `/devices`) and a UI listener that presents the current device inventory in HTML.
 
-### Finalize callback contract
+### Lease finalization and cleanup
 
-Reservation finalization is driven by a POST to the `/finalize` API route. The request must be JSON with the following shape:
+The lease renewer loop is responsible for both refreshing active leases and finalizing pending ones. It periodically scans all GPU leases and:
 
-```json
-{
-  "namespace": "pod-namespace",
-  "name": "pod-name",
-  "uid": "pod-uid",
-  "reservation-id": "reservation identifier returned during mutation",
-  "gpu-uuid": "GPU UUID assigned to the pod"
-}
-```
+- Promotes pending reservations to active when the matching pod exists and is using the assigned GPU.
+- Deletes pending leases that no longer have a pod or where the pod is not using the reserved device.
+- Deletes active leases whose holder pod has disappeared or is terminating.
 
-The callback is expected after a pod is created with the annotations written by the mutating webhook: `fudo.org/gpu.uuid`, `fudo.org/gpu.reservation-id`, and `fudo.org/gpu.node`. A successful finalize request returns `200` with `{ "status": "ok" }`; missing fields return `400` with an error message.
-
-Example curl invocation:
-
-```bash
-curl -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "namespace": "default",
-    "name": "example",
-    "uid": "12d34...",
-    "reservation-id": "resv-abc",
-    "gpu-uuid": "GPU-d3adbeef"
-  }' \
-  http://localhost:8080/finalize
-```
+This removes the need for an external finalize webhook—the renewer handles both promotion and garbage collection based on the current state of pods and leases.
 
 
 ## Testing
