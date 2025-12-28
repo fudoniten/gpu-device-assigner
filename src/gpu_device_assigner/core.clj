@@ -333,7 +333,7 @@
                    (let [reservation-id (:reservation-id assignment)
                          state          (:state assignment)
                          pod            (:pod (log/trace! :device/assignment assignment))
-                         pod-detail     (when (and pod (= active-reservation (:status assignment)))
+                         pod-detail     (when (and pod (= active-reservation state))
                                           (log/trace! :device/pod-detail
                                                       (pod-uid->pod ctx (:namespace pod) (:uid pod))))
                          exists?        (boolean pod-detail)
