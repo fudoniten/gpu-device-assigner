@@ -45,11 +45,12 @@
 
 (defn finalize-reservation!
   "Verify a reservation lease is held for this pod and promote it to the pod UID."
-  [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace pod-uid] :as reservation}]
+  [{:keys [k8s-client claims-namespace]} {:keys [reservation-id device-id namespace pod-uid uid] :as reservation}]
   (let [lease-name (core/lease-name device-id)
         lease      (log/trace! :lease/result (k8s/get-lease k8s-client claims-namespace lease-name))
         holder     (get-in lease [:spec :holderIdentity])
-        labels     (get-in lease [:metadata :labels])]
+        labels     (get-in lease [:metadata :labels])
+        pod-uid    (or pod-uid uid)]
     (cond
       (nil? lease)
       (log! :error (format "no lease %s/%s found for %s while finalizing reservation %s" claims-namespace lease-name device-id reservation-id))
@@ -84,33 +85,92 @@
                                reservation-id namespace (:name reservation) device-id (util/pprint-string res))))
         status))))
 
+(defn- pod-using-device?
+  [pod device-id]
+  (let [annotations (get-in pod [:metadata :annotations])
+        gpu-uuid    (core/annotation-value annotations core/gpu-annotation)
+        assignment  (core/annotation-value annotations :cdi.k8s.io/gpu-assignment)
+        dev-str     (name device-id)]
+    (or (= dev-str (some-> gpu-uuid name))
+        (and assignment (str/ends-with? assignment dev-str)))))
+
+(defn- reservation-pod
+  [{:keys [k8s-client]} pod-namespace reservation-id]
+  (some (fn [pod]
+          (when (= reservation-id (core/annotation-value (get-in pod [:metadata :annotations])
+                                                        core/reservation-annotation))
+            pod))
+        (-> (k8s/get-namespace-pods k8s-client pod-namespace)
+            :items)))
+
+(defn- delete-lease!
+  [{:keys [k8s-client claims-namespace]} lease-name reason]
+  (let [{:keys [status] :as res} (k8s/delete-lease k8s-client claims-namespace lease-name)]
+    (if (<= 200 status 299)
+      (log! :info (format "deleted lease %s/%s (%s)" claims-namespace lease-name reason))
+      (log! :error (format "failed to delete lease %s/%s (%s): %s"
+                           claims-namespace lease-name reason (util/pprint-string res))))))
+
 (defn renew-leases-once!
-  "List leases in CLAIMS_NS; renew those whose holder pod is still active."
-  [{:keys [k8s-client claims-namespace]}]
+  "List leases in CLAIMS_NS; renew active ones, finalize pending ones, and delete stale ones."
+  [{:keys [k8s-client claims-namespace] :as ctx}]
   (assert (string? claims-namespace))
   (try
     (let [leases (some-> (k8s/list-leases k8s-client claims-namespace)
                          :items)]
       (doseq [lease leases]
         (log/trace! (format "LEASE: %s" (with-out-str (pprint lease))))
-        (let [ln        (get-in lease [:metadata :name])
-              pod-ns    (or (get-in lease [:metadata :labels :fudo.org/pod.namespace])
-                            (get-in lease [:metadata :labels "fudo.org/pod.namespace"]))
-              state     (or (get-in lease [:metadata :labels (name core/reservation-state-label)])
-                            (get-in lease [:metadata :labels core/reservation-state-label]))
-              uid       (get-in lease [:spec :holderIdentity])]
+        (let [ln            (get-in lease [:metadata :name])
+              labels        (get-in lease [:metadata :labels])
+              annotations   (get-in lease [:metadata :annotations])
+              pod-ns        (or (get labels :fudo.org/pod.namespace)
+                                (get labels "fudo.org/pod.namespace"))
+              state         (or (get labels (name core/reservation-state-label))
+                                (get labels core/reservation-state-label))
+              uid           (get-in lease [:spec :holderIdentity])
+              device-id     (or (get labels :fudo.org/gpu.uuid)
+                                (get labels "fudo.org/gpu.uuid"))
+              reservation-id (or (core/annotation-value annotations core/reservation-annotation)
+                                 uid)]
           (cond
-            (or (nil? uid) (empty? uid))
-            (log! :debug (format "lease %s/%s has no holderIdentity; skipping"
-                                 claims-namespace ln))
-
-            (= state core/proposed-reservation)
-            (log! :debug (format "lease %s/%s marked as proposal; skipping pod lookup until finalized"
+            (str/blank? device-id)
+            (log! :debug (format "lease %s/%s missing device id; skipping"
                                  claims-namespace ln))
 
             (str/blank? pod-ns)
             (log! :debug (format "lease %s/%s missing pod namespace label; skipping"
                                  claims-namespace ln))
+
+            (or (nil? uid) (empty? uid))
+            (do (log! :info (format "lease %s/%s has no holderIdentity; deleting"
+                                    claims-namespace ln))
+                (delete-lease! ctx ln "empty holderIdentity"))
+
+            (= state core/proposed-reservation)
+            (try
+              (if-let [pod (reservation-pod ctx pod-ns reservation-id)]
+                (let [pod-uid (get-in pod [:metadata :uid])
+                      pod-name (get-in pod [:metadata :name])]
+                  (cond
+                    (not (active-pod? pod))
+                    (delete-lease! ctx ln (format "pod %s/%s not active for pending reservation"
+                                                  pod-ns pod-name))
+
+                    (pod-using-device? pod device-id)
+                    (finalize-reservation! ctx {:reservation-id reservation-id
+                                                :device-id      device-id
+                                                :namespace      pod-ns
+                                                :pod-uid        pod-uid
+                                                :name           pod-name})
+
+                    :else
+                    (delete-lease! ctx ln (format "pod %s/%s not using assigned device %s"
+                                                  pod-ns pod-name device-id))))
+                (delete-lease! ctx ln (format "no pod found for pending reservation %s" reservation-id)))
+              (catch Exception e
+                (log/error! e (format "error finalizing lease %s/%s: %s"
+                                      claims-namespace ln (.getMessage e)))
+                (log! :debug (with-out-str (print-stack-trace e)))))
 
             :else
             (try
@@ -123,13 +183,10 @@
                                            (get-in pod [:metadata :namespace])
                                            (get-in pod [:metadata :name])
                                            uid)))
-                  (log! :debug (format "pod %s/%s not active; not renewing %s/%s"
-                                       (get-in pod [:metadata :namespace])
-                                       (get-in pod [:metadata :name])
-                                       claims-namespace ln)))
-                ;; Pod not found: let it expire (or delete here if you want eager GC)
-                (log! :debug (format "holder pod uid=%s not found; not renewing %s/%s"
-                                     uid claims-namespace ln)))
+                  (delete-lease! ctx ln (format "pod %s/%s not active; deleting lease"
+                                                (get-in pod [:metadata :namespace])
+                                                (get-in pod [:metadata :name]))))
+                (delete-lease! ctx ln (format "holder pod uid=%s not found" uid)))
               (catch Exception e
                 (log/error! e (format "error processing lease %s/%s: %s"
                                       claims-namespace ln (.getMessage e)))

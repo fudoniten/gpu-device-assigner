@@ -155,13 +155,13 @@
                         [:Lease :get] {:body lease}
                         [:Lease :patch/json-merge] (do (reset! patched request)
                                                        {:status 200})
-                        [:Node :list] {:items []}
-                        [:Pod :list] {:items []}))))
+        [:Node :list] {:items []}
+        [:Pod :list] {:items []}))))
           ctx {:k8s-client client :claims-namespace "gpu-claims"}]
       (renewer/finalize-reservation! ctx {:reservation-id "res-123"
                                           :device-id "gpu1"
                                           :namespace "default"
-                                          :uid "pod-uid"
+                                          :pod-uid "pod-uid"
                                           :name "demo"})
       (is (= "pod-uid" (get-in @patched [:body :spec :holderIdentity])))
       (is (= core/default-lease-seconds (get-in @patched [:body :spec :leaseDurationSeconds])))
