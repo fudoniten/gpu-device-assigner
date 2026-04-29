@@ -92,6 +92,18 @@
         (log/trace! (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
         res))))
 
+(defn- nvidia-gpu-requested?
+  "Return true if any container or init-container in the pod spec requests nvidia.com/gpu resources."
+  [pod-spec]
+  (boolean
+   (some (fn [container]
+           (some (fn [[k v]]
+                   (and (= (util/full-name k) "nvidia.com/gpu")
+                        (not (#{0 "0"} v))))
+                 (get-in container [:resources :requests] {})))
+         (concat (get pod-spec :containers [])
+                 (get pod-spec :initContainers [])))))
+
 (defn handle-mutation
   "Handle an AdmissionReview request for mutating a pod's annotations."
   [ctx]
@@ -118,13 +130,24 @@
           requested-labels (->> all-labels
                                (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
                                (keys)
-                               (set))]
-      (if dry-run?
+                               (set))
+          pod-spec         (get-in req [:request :object :spec])]
+      (cond
+        dry-run?
         (do (log! :info "dry-run AdmissionReview; skipping Lease allocation")
             (admission-review-response :uid uid :allowed? true
                                        :status 200
                                        :message "dry-run: no mutation"))
 
+        (and (nvidia-gpu-requested? pod-spec) (empty? requested-labels))
+        (do (log! :warn (format "rejecting pod %s/%s: requests nvidia.com/gpu without any fudo.org/gpu.* labels"
+                                namespace pod))
+            (admission-review-response :uid uid :allowed? false
+                                       :status 403
+                                       :message (format "pod %s/%s requests nvidia.com/gpu resources but specifies no fudo.org/gpu.* labels; add the appropriate labels to declare GPU requirements"
+                                                        namespace pod)))
+
+        :else
         (do (log! :info (format "processing pod %s/%s, requesting labels [%s]"
                                 namespace pod (str/join "," (map name requested-labels))))
             (if-let [assigned-device (core/assign-device ctx {:pod              pod
