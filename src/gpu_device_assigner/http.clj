@@ -68,8 +68,8 @@
   "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs.
    `devices` is a seq of {:device-id uuid :node node}; all must share the same node."
   [_ devices reservation-id]
-  (let [node      (-> devices first :node name)
-        uuids     (mapv #(-> % :device-id name) devices)
+  (let [node      (-> devices first :node)
+        uuids     (mapv #(-> % :device-id) devices)
         cdi-value (str/join "," (map #(format "nvidia.com/gpu=UUID=%s" %) uuids))
         patch
         [{:op "add" :path "/metadata/annotations" :value {}}
