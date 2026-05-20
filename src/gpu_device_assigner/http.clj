@@ -65,19 +65,23 @@
                                        :message (.getMessage e))))))))
 
 (defn device-assignment-patch
-  "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs."
-  [_ device-id node reservation-id]
-  (let [patch
+  "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs.
+   `devices` is a seq of {:device-id uuid :node node}; all must share the same node."
+  [_ devices reservation-id]
+  (let [node      (-> devices first :node name)
+        uuids     (mapv #(-> % :device-id name) devices)
+        cdi-value (str/join "," (map #(format "nvidia.com/gpu=UUID=%s" %) uuids))
+        patch
         [{:op "add" :path "/metadata/annotations" :value {}}
-         ;; Breadcrumbs for ops / GC tools
-         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.uuid" :value (name device-id)}
-         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.node" :value (name node)}
+         ;; Breadcrumbs for ops / GC tools (comma-separated for multi-GPU)
+         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.uuid"
+          :value (str/join "," uuids)}
+         {:op "add" :path "/metadata/annotations/fudo.org~1gpu.node" :value node}
          {:op "add" :path "/metadata/annotations/fudo.org~1gpu.reservation-id" :value reservation-id}
-         ;; Your CDI assignment (unchanged form)
-         {:op "add" :path "/metadata/annotations/cdi.k8s.io~1gpu-assignment"
-          :value (format "nvidia.com/gpu=UUID=%s" (name device-id))}
-         ;; Hard bind to the node that actually has this UUID
-         {:op "add" :path "/spec/nodeName" :value (name node)}]]
+         ;; CDI assignment — comma-separated list for multi-GPU
+         {:op "add" :path "/metadata/annotations/cdi.k8s.io~1gpu-assignment" :value cdi-value}
+         ;; Hard bind to the node that actually has these UUIDs
+         {:op "add" :path "/spec/nodeName" :value node}]]
     (log/trace! (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
     (-> patch
         (util/try-json-generate)
@@ -103,6 +107,19 @@
                  (get-in container [:resources :requests] {})))
          (concat (get pod-spec :containers [])
                  (get pod-spec :initContainers [])))))
+
+(defn- nvidia-gpu-count
+  "Sum nvidia.com/gpu requests across all containers and init-containers."
+  [pod-spec]
+  (reduce +
+          (for [container (concat (get pod-spec :containers [])
+                                  (get pod-spec :initContainers []))
+                [k v]     (get-in container [:resources :requests] {})
+                :when     (= (util/full-name k) "nvidia.com/gpu")]
+            (cond
+              (string? v)  (try (Integer/parseInt v) (catch NumberFormatException _ 0))
+              (integer? v) (long v)
+              :else        0))))
 
 (defn handle-mutation
   "Handle an AdmissionReview request for mutating a pod's annotations."
@@ -131,7 +148,8 @@
                                (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
                                (keys)
                                (set))
-          pod-spec         (get-in req [:request :object :spec])]
+          pod-spec         (get-in req [:request :object :spec])
+          gpu-count        (nvidia-gpu-count pod-spec)]
       (cond
         dry-run?
         (do (log! :info "dry-run AdmissionReview; skipping Lease allocation")
@@ -148,20 +166,21 @@
                                                         namespace pod)))
 
         :else
-        (do (log! :info (format "processing pod %s/%s, requesting labels [%s]"
-                                namespace pod (str/join "," (map name requested-labels))))
+        (do (log! :info (format "processing pod %s/%s, requesting %d GPU(s) with labels [%s]"
+                                namespace pod gpu-count (str/join "," (map name requested-labels))))
             (if-let [assigned-device (core/assign-device ctx {:pod              pod
                                                               :reservation-id   reservation-id
                                                               :namespace        namespace
-                                                              :requested-labels requested-labels})]
-              (let [{:keys [device-id node reservation-id]} assigned-device]
+                                                              :requested-labels requested-labels
+                                                              :gpu-count        gpu-count})]
+              (let [{:keys [devices reservation-id]} assigned-device]
                 (log/trace! :admission-review/accept
                             (admission-review-response :uid uid :allowed? true
-                                                       :patch (device-assignment-patch ctx device-id node reservation-id))))
+                                                       :patch (device-assignment-patch ctx devices reservation-id))))
               (log/trace! :admission-review/reject
                           (admission-review-response :uid uid :status 429 :allowed? false
-                                                     :message (format "no GPUs with requested labels free for pod %s/%s"
-                                                                      namespace pod)))))))))
+                                                     :message (format "no %d-GPU set with requested labels free for pod %s/%s"
+                                                                      gpu-count namespace pod)))))))))
 
 (defn handle-device-inventory
   "Return a snapshot of devices, their labels, and any current assignments."

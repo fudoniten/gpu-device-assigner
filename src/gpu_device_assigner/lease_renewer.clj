@@ -86,13 +86,19 @@
         status))))
 
 (defn- pod-using-device?
+  "Return true when the pod's GPU annotations reference `device-id`.
+   Both annotations may be comma-separated lists for multi-GPU pods."
   [pod device-id]
   (let [annotations (get-in pod [:metadata :annotations])
         gpu-uuid    (core/annotation-value annotations core/gpu-annotation)
         assignment  (core/annotation-value annotations :cdi.k8s.io/gpu-assignment)
         dev-str     (name device-id)]
-    (or (= dev-str (some-> gpu-uuid name))
-        (and assignment (str/ends-with? assignment dev-str)))))
+    (or (when gpu-uuid
+          (some #(= dev-str (str/trim %))
+                (str/split (name gpu-uuid) #",")))
+        (when assignment
+          (some #(str/ends-with? (str/trim %) dev-str)
+                (str/split assignment #","))))))
 
 (defn- reservation-pod
   [{:keys [k8s-client]} pod-namespace reservation-id]
