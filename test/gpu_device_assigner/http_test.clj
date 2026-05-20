@@ -30,7 +30,7 @@
       (is (= false (get-in result [:response :allowed]))))))
 
 (deftest nvidia-gpu-tag-validation
-  (testing "rejects pod requesting nvidia.com/gpu without fudo.org/gpu.* labels"
+  (testing "rejects pod requesting nvidia.com/gpu with no fudo.org labels whatsoever"
     (let [handle-mutation-fn (http/handle-mutation {})
           request {:kind    "AdmissionReview"
                    :request {:uid    "abc123"
@@ -59,7 +59,26 @@
       (is (= false (get-in response [:response :allowed])))
       (is (= 403 (get-in response [:response :status :code])))))
 
-  (testing "allows pod with nvidia.com/gpu request AND fudo.org/gpu.* labels"
+  (testing "allows pod with nvidia.com/gpu AND fudo.org/gpu.assign (lease-system opt-in)"
+    ;; Pods with only fudo.org/gpu.assign were previously allowed through and
+    ;; assigned a random GPU.  They must still be allowed through so that the
+    ;; webhook service itself (and other pods that opt in via the assign label
+    ;; without a specific type label) are not blocked.
+    (with-redefs [core/assign-device (fn [_ _] {:devices [{:device-id :gpu1 :node "node1"}]
+                                                :node "node1"
+                                                :reservation-id "res-1"})]
+      (let [handle-mutation-fn (http/handle-mutation {})
+            request {:kind    "AdmissionReview"
+                     :request {:uid    "abc-assign"
+                               :object {:metadata {:name      "assign-only-pod"
+                                                   :namespace "default"
+                                                   :labels    {:fudo.org/gpu.assign true}}
+                                        :spec     {:containers [{:name      "app"
+                                                                 :resources {:requests {"nvidia.com/gpu" "1"}}}]}}}}
+            response (handle-mutation-fn request)]
+        (is (= true (get-in response [:response :allowed]))))))
+
+  (testing "allows pod with nvidia.com/gpu request AND fudo.org/gpu.* type labels"
     (with-redefs [core/assign-device (fn [_ _] {:devices [{:device-id :gpu1 :node "node1"}]
                                                 :node "node1"
                                                 :reservation-id "res-1"})]
@@ -86,4 +105,13 @@
                                                    :labels    {}}
                                         :spec     {:containers [{:name "app"}]}}}}
             response (handle-mutation-fn request)]
-        (is (not (= 403 (get-in response [:response :status :code]))))))))
+        (is (not (= 403 (get-in response [:response :status :code])))))))
+
+  (testing "returns 400 for non-AdmissionReview kind"
+    (let [handle-mutation-fn (http/handle-mutation {})
+          request {:kind    "SomethingElse"
+                   :request {:uid "xyz"}}
+          response (handle-mutation-fn request)]
+      (is (= "AdmissionReview" (:kind response)))
+      (is (= false (get-in response [:response :allowed])))
+      (is (= 400 (get-in response [:response :status :code]))))))
