@@ -244,15 +244,25 @@
     (log! :debug (format "matching devices: %s" (pr-str matching)))
     matching))
 
-(s/fdef pick-device
+(defn release-lease!
+  "Delete a GPU lease. Used for rollback when a partial multi-GPU claim fails."
+  [{:keys [k8s-client] :as ctx} device-uuid]
+  (let [ns (claims-namespace ctx)
+        nm (lease-name device-uuid)]
+    (log! :info (format "rolling back lease for device %s" device-uuid))
+    (k8s/delete-lease k8s-client ns nm)))
+
+(s/fdef pick-devices
   :args (s/cat :ctx       ::context/context
                :holder-id string?
-               :labels    ::device-labels)
-  :ret  (s/nilable (s/keys :req-un [::device-id ::node])))
-(defn pick-device
-  "Pick the first candidate device whose Lease we can claim atomically.
-   Returns {:device-id <uuid> :node <node>} or nil."
-  [ctx holder-identity labels]
+               :labels    ::device-labels
+               :n         pos-int?)
+  :ret  (s/nilable (s/coll-of (s/keys :req-un [::device-id ::node]))))
+(defn pick-devices
+  "Claim exactly `n` GPUs matching `labels`, all on the same node.
+   Returns [{:device-id <uuid> :node <node>} ...] or nil.
+   On partial failure (some but not all devices claimed) rolls back already-claimed leases."
+  [ctx holder-identity labels n]
   (try
     (let [device-labels (get-all-device-labels ctx)
           pod-name      (str (:namespace ctx) "/" (:pod ctx))
@@ -261,33 +271,46 @@
       (log! :info (format "available tags: %s" (format-labels available)))
       (log! :debug (format "device label map: %s" (util/pprint-string device-labels)))
       (if (empty? device-labels)
-        (log! :info (format "no devices discovered when scheduling pod %s" pod-name))
+        (do (log! :info (format "no devices discovered when scheduling pod %s" pod-name)) nil)
         (let [matching (find-matching-devices device-labels labels)]
           (if (empty? matching)
-            (log! :info (format "no matching devices available for pod %s" pod-name))
-            ;; Iterate deterministically or randomly; here we randomize to spread load
-            (let [result (when-let [order (shuffle (keys matching))]
-                           (some (fn [dev-uuid]
-                                   (try
-                                     (when (try-claim-uuid! ctx dev-uuid holder-identity)
-                                       (log! :info
-                                             (format "claimed device %s for pod %s on node %s"
-                                                     dev-uuid pod-name (-> matching dev-uuid :node)))
-                                       {:device-id dev-uuid
-                                        :node      (-> matching dev-uuid :node)})
-                                     (catch Throwable e
-                                       (log/error! e (format "Failed to claim device %s for pod %s"
-                                                             dev-uuid pod-name))
-                                       (log! :debug (with-out-str (print-stack-trace e)))
-                                       nil)))
-                                 order))]
-              result)))))
+            (do (log! :info (format "no matching devices available for pod %s" pod-name)) nil)
+            ;; Group matching devices by node; only nodes with >= n devices qualify
+            (let [by-node (->> matching
+                               (group-by (fn [[_ {:keys [node]}]] node))
+                               (filter (fn [[_ devs]] (>= (count devs) n)))
+                               shuffle)]
+              (if (empty? by-node)
+                (do (log! :info (format "no single node has %d matching devices for pod %s" n pod-name)) nil)
+                (some (fn [[node devices]]
+                        (log! :info (format "attempting to claim %d device(s) on node %s for pod %s"
+                                            n node pod-name))
+                        (let [claimed (atom [])]
+                          (try
+                            (doseq [[dev-uuid _] (take n (shuffle devices))]
+                              (if (try-claim-uuid! ctx dev-uuid holder-identity)
+                                (do (log! :info (format "claimed device %s for pod %s on node %s"
+                                                        dev-uuid pod-name node))
+                                    (swap! claimed conj {:device-id dev-uuid :node node}))
+                                (throw (ex-info "device claim failed during multi-GPU acquisition"
+                                                {:dev-uuid dev-uuid :node node}))))
+                            @claimed
+                            (catch Throwable e
+                              (log! :info (format "rolling back %d partial claim(s) on node %s for pod %s: %s"
+                                                  (count @claimed) node pod-name (.getMessage e)))
+                              (doseq [{:keys [device-id]} @claimed]
+                                (try (release-lease! ctx device-id)
+                                     (catch Throwable re
+                                       (log! :error (format "failed to roll back lease for %s: %s"
+                                                            device-id (.getMessage re))))))
+                              nil))))
+                      by-node)))))))
     (catch Throwable e
-      (log/error! e "Failed to pick device via Lease")
+      (log/error! e "Failed to pick devices via Lease")
       (log! :debug (with-out-str (print-stack-trace e)))
       nil)))
 
-(stest/instrument 'pick-device)
+(stest/instrument 'pick-devices)
 
 (defn pod-uid->pod
   "Lookup a pod by UID within the provided namespace."
@@ -349,23 +372,25 @@
           device-labels)))
 
 (defn assign-device
-  "Claim a GPU via Lease and return the JSONPatch-ready info."
-  [ctx {:keys [pod namespace requested-labels reservation-id]}]
-  (let [requested-labels (set (map keyword requested-labels))]
-    ;; Make reservation available to pick-device -> try-claim-uuid!
-    (if-let [{:keys [device-id node]} (log/trace! :device/selection
-                                                  (pick-device (assoc ctx
-                                                                      :namespace namespace
-                                                                      :pod pod)
-                                                               reservation-id requested-labels))]
-      (when device-id
-        (log! :info (format "claimed lease for %s; assigning to pod %s/%s on node %s"
-                            device-id namespace pod node))
-        {:device-id device-id
-         :pod pod
-         :namespace namespace
-         :node node
+  "Claim one or more GPUs via Lease and return the JSONPatch-ready info.
+   `:gpu-count` defaults to 1; all GPUs will be on the same node."
+  [ctx {:keys [pod namespace requested-labels reservation-id gpu-count]}]
+  (let [requested-labels (set (map keyword requested-labels))
+        n                (max 1 (long (or gpu-count 1)))]
+    (if-let [devices (log/trace! :device/selection
+                                 (pick-devices (assoc ctx
+                                                      :namespace namespace
+                                                      :pod pod)
+                                              reservation-id requested-labels n))]
+      (let [node (-> devices first :node)]
+        (log! :info (format "claimed %d lease(s) for pod %s/%s on node %s: [%s]"
+                            (count devices) namespace pod node
+                            (str/join ", " (map (comp name :device-id) devices))))
+        {:devices        devices
+         :pod            pod
+         :namespace      namespace
+         :node           node
          :reservation-id reservation-id})
-      (do (log! :error (format "no free device (by Lease) for pod %s/%s, labels [%s]"
-                               namespace pod (format-labels requested-labels)))
+      (do (log! :error (format "no free %d-GPU set (by Lease) for pod %s/%s, labels [%s]"
+                               n namespace pod (format-labels requested-labels)))
           nil))))

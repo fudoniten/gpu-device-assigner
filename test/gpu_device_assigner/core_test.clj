@@ -25,7 +25,9 @@
 
 (deftest test-handle-mutation
   (testing "Handle valid mutation request"
-    (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1" :reservation-id "res-123"})]
+    (with-redefs [core/assign-device (fn [_ _] {:devices [{:device-id :gpu1 :node "node1"}]
+                                                :node "node1"
+                                                :reservation-id "res-123"})]
       (let [handle-mutation-fn (http/handle-mutation {})
             request {:kind "AdmissionReview"
                      :request {:uid "123abc"
@@ -88,9 +90,10 @@
                                               {:gpu1 {:node "node1" :labels #{:fudo.org/gpu.test}}})
                   core/try-claim-uuid! (fn [_ _ _ & _]
                                         (throw (ex-info "lease failed" {})))]
-      (is (nil? (core/pick-device {:k8s-client (mock-k8s-client)}
-                                  "pod-uid"
-                                  #{:fudo.org/gpu.test})))))
+      (is (nil? (core/pick-devices {:k8s-client (mock-k8s-client)}
+                                   "pod-uid"
+                                   #{:fudo.org/gpu.test}
+                                   1)))))
 
   (testing "Create leases with pod namespace labels"
     (let [captured-request (atom nil)
@@ -117,7 +120,7 @@
     (with-redefs [core/try-claim-uuid! (fn [_ _ _ & _] true)]
       (let [ctx {:k8s-client (mock-k8s-client)}
             result (core/assign-device ctx {:pod "test-pod" :namespace "default" :requested-labels #{:fudo.org/gpu.test} :reservation-id "res-1"})]
-        (is (= :gpu1 (:device-id result)))
+        (is (= [{:device-id :gpu1 :node "node1"}] (:devices result)))
         (is (= "node1" (:node result))))))
 
   (testing "Succeed if a matching device is found, and is reserved via Lease by a pod that no longer exists"
@@ -139,7 +142,7 @@
                                     [:Lease :patch/json-merge] {:status 200}
                                     [:Pod :list] {:items []}))))}
           result (core/assign-device ctx {:pod "test-pod" :namespace "default" :requested-labels #{"label1"} :reservation-id "pod-uid"})]
-      (is (= :gpu1 (:device-id result)))
+      (is (= [{:device-id :gpu1 :node "node1"}] (:devices result)))
       (is (= "node1" (:node result))))))
 
   (testing "Finalize reservation promotes lease to pod UID"

@@ -60,7 +60,9 @@
       (is (= 403 (get-in response [:response :status :code])))))
 
   (testing "allows pod with nvidia.com/gpu request AND fudo.org/gpu.* labels"
-    (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1" :reservation-id "res-1"})]
+    (with-redefs [core/assign-device (fn [_ _] {:devices [{:device-id :gpu1 :node "node1"}]
+                                                :node "node1"
+                                                :reservation-id "res-1"})]
       (let [handle-mutation-fn (http/handle-mutation {})
             request {:kind    "AdmissionReview"
                      :request {:uid    "abc789"
@@ -73,7 +75,9 @@
         (is (= true (get-in response [:response :allowed]))))))
 
   (testing "allows pod with no nvidia.com/gpu request and no fudo.org labels"
-    (with-redefs [core/assign-device (fn [_ _] {:device-id :gpu1 :node "node1" :reservation-id "res-1"})]
+    (with-redefs [core/assign-device (fn [_ _] {:devices [{:device-id :gpu1 :node "node1"}]
+                                                :node "node1"
+                                                :reservation-id "res-1"})]
       (let [handle-mutation-fn (http/handle-mutation {})
             request {:kind    "AdmissionReview"
                      :request {:uid    "abc000"
