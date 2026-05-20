@@ -125,62 +125,70 @@
   "Handle an AdmissionReview request for mutating a pod's annotations."
   [ctx]
   (fn [{:keys [kind] :as req}]
-    (when-not (= kind "AdmissionReview")
+    (if (not= kind "AdmissionReview")
       {:apiVersion "admission.k8s.io/v1"
        :kind       "AdmissionReview"
        :response   {:uid     (get-in req [:request :uid])
                     :allowed false
                     :status  {:code    400
-                              :message (format "Unexpected request kind: %s" kind)}}})
-    (log! :debug (format "Received AdmissionReview request: %s" (util/pprint-string req)))
-    (let [dry-run?         (true? (get-in req [:request :dryRun]))
-          fudo-label?      (fn [[k _]] (= "fudo.org" (namespace k)))
-          label-enabled?   (fn [[_ v]] v)
-          gpu-label?       (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
-          remove-assign    (fn [[k _]] (not= k :fudo.org/gpu.assign))
-          uid              (get-in req [:request :uid])
-          reservation-id   (core/get-claim-id req)
-          pod              (or (get-in req [:request :object :metadata :name])
-                               (get-in req [:request :object :metadata :generateName]))
-          namespace        (get-in req [:request :object :metadata :namespace])
-          all-labels       (get-in req [:request :object :metadata :labels])
-          requested-labels (->> all-labels
-                               (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
-                               (keys)
-                               (set))
-          pod-spec         (get-in req [:request :object :spec])
-          gpu-count        (nvidia-gpu-count pod-spec)]
-      (cond
-        dry-run?
-        (do (log! :info "dry-run AdmissionReview; skipping Lease allocation")
-            (admission-review-response :uid uid :allowed? true
-                                       :status 200
-                                       :message "dry-run: no mutation"))
+                              :message (format "Unexpected request kind: %s" kind)}}}
+      (do
+        (log! :debug (format "Received AdmissionReview request: %s" (util/pprint-string req)))
+        (let [dry-run?          (true? (get-in req [:request :dryRun]))
+              fudo-label?       (fn [[k _]] (= "fudo.org" (namespace k)))
+              label-enabled?    (fn [[_ v]] v)
+              gpu-label?        (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
+              remove-assign     (fn [[k _]] (not= k :fudo.org/gpu.assign))
+              uid               (get-in req [:request :uid])
+              reservation-id    (core/get-claim-id req)
+              pod               (or (get-in req [:request :object :metadata :name])
+                                    (get-in req [:request :object :metadata :generateName]))
+              namespace         (get-in req [:request :object :metadata :namespace])
+              all-labels        (get-in req [:request :object :metadata :labels])
+              requested-labels  (->> all-labels
+                                     (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
+                                     (keys)
+                                     (set))
+              has-assign-label? (boolean (get all-labels :fudo.org/gpu.assign))
+              pod-spec          (get-in req [:request :object :spec])
+              gpu-count         (nvidia-gpu-count pod-spec)]
+          (cond
+            dry-run?
+            (do (log! :info "dry-run AdmissionReview; skipping Lease allocation")
+                (admission-review-response :uid uid :allowed? true
+                                           :status 200
+                                           :message "dry-run: no mutation"))
 
-        (and (nvidia-gpu-requested? pod-spec) (empty? requested-labels))
-        (do (log! :warn (format "rejecting pod %s/%s: requests nvidia.com/gpu without any fudo.org/gpu.* labels"
-                                namespace pod))
-            (admission-review-response :uid uid :allowed? false
-                                       :status 403
-                                       :message (format "pod %s/%s requests nvidia.com/gpu resources but specifies no fudo.org/gpu.* labels; add the appropriate labels to declare GPU requirements"
-                                                        namespace pod)))
+            ;; Reject only if the pod requests nvidia.com/gpu with no fudo.org/gpu.*
+            ;; labels at all — not even fudo.org/gpu.assign. Pods that have opted in
+            ;; via fudo.org/gpu.assign are allowed through to the lease system even
+            ;; when they carry no additional type/model labels.
+            (and (nvidia-gpu-requested? pod-spec)
+                 (empty? requested-labels)
+                 (not has-assign-label?))
+            (do (log! :warn (format "rejecting pod %s/%s: requests nvidia.com/gpu without any fudo.org/gpu.* labels"
+                                    namespace pod))
+                (admission-review-response :uid uid :allowed? false
+                                           :status 403
+                                           :message (format "pod %s/%s requests nvidia.com/gpu resources but specifies no fudo.org/gpu.* labels; add the appropriate labels to declare GPU requirements"
+                                                            namespace pod)))
 
-        :else
-        (do (log! :info (format "processing pod %s/%s, requesting %d GPU(s) with labels [%s]"
-                                namespace pod gpu-count (str/join "," (map name requested-labels))))
-            (if-let [assigned-device (core/assign-device ctx {:pod              pod
-                                                              :reservation-id   reservation-id
-                                                              :namespace        namespace
-                                                              :requested-labels requested-labels
-                                                              :gpu-count        gpu-count})]
-              (let [{:keys [devices reservation-id]} assigned-device]
-                (log/trace! :admission-review/accept
-                            (admission-review-response :uid uid :allowed? true
-                                                       :patch (device-assignment-patch ctx devices reservation-id))))
-              (log/trace! :admission-review/reject
-                          (admission-review-response :uid uid :status 429 :allowed? false
-                                                     :message (format "no %d-GPU set with requested labels free for pod %s/%s"
-                                                                      gpu-count namespace pod)))))))))
+            :else
+            (do (log! :info (format "processing pod %s/%s, requesting %d GPU(s) with labels [%s]"
+                                    namespace pod gpu-count (str/join "," (map name requested-labels))))
+                (if-let [assigned-device (core/assign-device ctx {:pod              pod
+                                                                  :reservation-id   reservation-id
+                                                                  :namespace        namespace
+                                                                  :requested-labels requested-labels
+                                                                  :gpu-count        gpu-count})]
+                  (let [{:keys [devices reservation-id]} assigned-device]
+                    (log/trace! :admission-review/accept
+                                (admission-review-response :uid uid :allowed? true
+                                                           :patch (device-assignment-patch ctx devices reservation-id))))
+                  (log/trace! :admission-review/reject
+                              (admission-review-response :uid uid :status 429 :allowed? false
+                                                         :message (format "no %d-GPU set with requested labels free for pod %s/%s"
+                                                                          gpu-count namespace pod)))))))))))
 
 (defn handle-device-inventory
   "Return a snapshot of devices, their labels, and any current assignments."
