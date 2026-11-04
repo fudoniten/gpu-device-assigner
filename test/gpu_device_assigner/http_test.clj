@@ -20,14 +20,34 @@
       (is (= "application/json" (get headers "Content-Type")))
       (is (= {:ok true} (util/parse-json body))))))
 
-(deftest open-fail-middleware-handles-errors
-  (testing "wraps exceptions in admission review response"
-    (let [handler ((http/open-fail-middleware nil) (fn [_] (throw (ex-info "boom" {}))))
-          result  (handler {:request {:uid "abc"}})]
+(deftest json-middleware-turns-handler-errors-into-denials
+  (testing "handler exceptions become a well-formed AdmissionReview denial with the request uid"
+    (let [handler (http/json-middleware (fn [_] (throw (ex-info "boom" {}))))
+          {:keys [body]} (handler {:body (json-body {:kind "AdmissionReview" :request {:uid "abc"}})})
+          result (util/parse-json body)]
       (is (= "AdmissionReview" (:kind result)))
       (is (= "abc" (get-in result [:response :uid])))
       (is (= 500 (get-in result [:response :status :code])))
       (is (= false (get-in result [:response :allowed]))))))
+
+(deftest error-middleware-returns-http-500
+  (let [handler ((http/error-middleware nil) (fn [_] (throw (ex-info "boom" {}))))
+        result  (handler {})]
+    (is (= 500 (:status result)))))
+
+(deftest mutate-route-end-to-end
+  (testing "the /mutate route decodes the review and returns JSON"
+    (let [app (http/api-app {})
+          {:keys [status body]} (app {:request-method :post
+                                      :uri            "/mutate"
+                                      :body           (json-body {:kind "Nope" :request {:uid "u1"}})})
+          result (util/parse-json body)]
+      (is (= 200 status))
+      (is (= "u1" (get-in result [:response :uid])))
+      (is (= false (get-in result [:response :allowed]))))))
+
+(deftest healthz
+  (is (= 200 (:status ((http/api-app {}) {:request-method :get :uri "/healthz"})))))
 
 (deftest nvidia-gpu-tag-validation
   (testing "rejects pod requesting nvidia.com/gpu with no fudo.org labels whatsoever"
@@ -94,9 +114,7 @@
         (is (= true (get-in response [:response :allowed]))))))
 
   (testing "allows pod with no nvidia.com/gpu request and no fudo.org labels"
-    (with-redefs [core/assign-device (fn [_ _] {:devices [{:device-id :gpu1 :node "node1"}]
-                                                :node "node1"
-                                                :reservation-id "res-1"})]
+    (with-redefs [core/assign-device (fn [_ _] (throw (ex-info "should not be called" {})))]
       (let [handle-mutation-fn (http/handle-mutation {})
             request {:kind    "AdmissionReview"
                      :request {:uid    "abc000"
@@ -105,7 +123,8 @@
                                                    :labels    {}}
                                         :spec     {:containers [{:name "app"}]}}}}
             response (handle-mutation-fn request)]
-        (is (not (= 403 (get-in response [:response :status :code])))))))
+        (is (true? (get-in response [:response :allowed])))
+        (is (nil? (get-in response [:response :patch]))))))
 
   (testing "returns 400 for non-AdmissionReview kind"
     (let [handle-mutation-fn (http/handle-mutation {})

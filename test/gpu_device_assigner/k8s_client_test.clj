@@ -39,4 +39,3 @@
           client (k8s/->K8SClient mock-base-client)]
       (is (false? (k8s/pod-exists? client "nonexistent-pod" "default"))))))
 
-(t/run-tests 'gpu-device-assigner.k8s-client-test)

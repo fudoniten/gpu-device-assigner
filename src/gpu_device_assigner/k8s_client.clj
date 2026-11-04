@@ -1,6 +1,5 @@
 (ns gpu-device-assigner.k8s-client
   (:require [clojure.spec.alpha :as s]
-            [clojure.spec.test.alpha :as stest]
             [clojure.string :as str]
             [clojure.stacktrace :refer [print-stack-trace]]
 
@@ -33,6 +32,23 @@
                             {:stack-trace (with-out-str (print-stack-trace e))
                              :error e}))))))))
 
+(defn ok?
+  "True when `resp` is a successful API response.
+
+  `K8SBaseClient` returns the response *body* (with `:status 200` added) on
+  success, and `{:status <code> :error true ...}` on failure. Callers must use
+  this rather than reading `:items`/`:body` directly, so that an API error is
+  never mistaken for an empty result."
+  [resp]
+  (and (map? resp)
+       (not (:error resp))
+       (let [status (:status resp)]
+         (or (nil? status) (<= 200 status 299)))))
+
+(defn not-found?
+  [resp]
+  (= 404 (:status resp)))
+
 (defprotocol IK8SClient
   "Protocol defining Kubernetes client operations."
   (get-node           [self node-name])
@@ -42,14 +58,17 @@
   (create-lease       [self namespace name lease-body])
   (get-lease          [self namespace name])
   (patch-lease        [self namespace name merge-path])
-  (delete-lease       [self namespace name])
+  (delete-lease       [self namespace name] [self namespace name resource-version]
+    "Delete a Lease. With `resource-version`, the delete only succeeds if the
+     Lease has not changed since it was read (409 otherwise).")
   (list-leases        [self namespace])
 
   (get-pod-by-uid     [self namespace uid])
   (get-pod            [self pod-name namespace])
   (get-pods           [self])
   (pod-exists?        [self pod-name namespace])
-  (pod-uid-exists?    [self uid namespace])
+  (pod-uid-exists?    [self uid namespace]
+    "True/false when the pod list could be read; throws on API errors.")
   (get-namespace-pods [self namespace]))
 
 ;; Internal helpers for Lease API paths
@@ -106,17 +125,21 @@
                :request {:namespace namespace}}))
 
     (pod-exists? [self pod-name namespace]
-      (try (boolean (get-pod self pod-name namespace))
-           (catch ExceptionInfo e
-             (if (= (:type (ex-data e)) :not-found)
-               false
-               (throw e)))))
+      (let [resp (try (get-pod self pod-name namespace)
+                      (catch ExceptionInfo e
+                        (if (= (:type (ex-data e)) :not-found)
+                          {:status 404 :error true}
+                          (throw e))))]
+        (cond
+          (ok? resp)        true
+          (not-found? resp) false
+          :else (throw (ex-info "error looking up pod" {:response resp})))))
 
     (pod-uid-exists? [self uid namespace]
-      (some (fn [pod]
-              (when (= (get-in pod [:metadata :uid]) uid)
-                (boolean pod)))
-            (get-namespace-pods self namespace)))
+      (let [resp (get-namespace-pods self namespace)]
+        (when-not (ok? resp)
+          (throw (ex-info "error listing pods" {:namespace namespace :response resp})))
+        (boolean (some #(= uid (get-in % [:metadata :uid])) (:items resp)))))
 
     (create-lease [_ namespace name lease-body]
       ;; POST to the collection; ensure metadata.name/namespace are set in body
@@ -156,6 +179,16 @@
                :request {:name      name
                          :namespace namespace}}))
 
+    (delete-lease [_ namespace name resource-version]
+      (invoke client
+              {:kind    :Lease
+               :action  :delete
+               :request {:name      name
+                         :namespace namespace
+                         :body      {:apiVersion    "v1"
+                                     :kind          "DeleteOptions"
+                                     :preconditions {:resourceVersion resource-version}}}}))
+
     (list-leases [_ namespace]
       (invoke client
               {:kind    :Lease
@@ -163,12 +196,11 @@
                :request {:namespace namespace}}))
 
     (get-pod-by-uid [self namespace uid]
-      ;; fieldSelector works cluster-wide when you hit /api/v1/pods at the root
+      ;; Returns nil both when the pod is absent and when the list fails; use
+      ;; `get-namespace-pods` + `ok?` where that distinction matters.
       (some (fn [pod]
-              (log! :info (format ":k8s/pod-by-uid comparing %s == %s"
-                                  uid (get-in pod [:metadata :uid])))
               (when (= (get-in pod [:metadata :uid]) uid)
-                (log/trace! :k8s/pod-by-uid-returned pod)))
+                pod))
             (-> (get-namespace-pods self namespace) :items))))
 
 (defn base64-string?
@@ -185,7 +217,7 @@
 (defn k8s-client?
   "Check if an object satisfies the K8SClient protocol."
   [o]
-  (satisfies? K8SClient o))
+  (satisfies? IK8SClient o))
 
 (defn jwt-string?
   "Check if a string is a valid JWT token."
@@ -229,5 +261,3 @@
     (catch Exception e
       (log/error! (str "failed to create k8s-client: " (.getMessage e)))
       (throw (ex-info "failed to create k8s-client" {:error e})))))
-
-(stest/instrument 'create)
