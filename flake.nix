@@ -30,6 +30,10 @@
             name = "gpu-device-assigner";
             repo = "registry.kube.sea.fudo.link";
             tags = [ "latest" ];
+            # The cluster's local registry accepts unauthenticated pushes;
+            # without this, deployContainers assumes any non-localhost
+            # registry needs credentials and stops to ask for them.
+            requireAuth = false;
             entrypoint = let
               gpuDeviceAssigner = self.packages."${system}".gpuDeviceAssigner;
             in [ "${gpuDeviceAssigner}/bin/gpu-device-assigner" ];
@@ -38,11 +42,14 @@
         };
 
         checks = {
-          clojureTests = pkgs.runCommand "clojure-tests" { } ''
-            mkdir -p $TMPDIR
-            cd $TMPDIR
-            ${pkgs.clojure}/bin/clojure -M:test
-          '';
+          # Runs `clojure -M:test` inside the sandbox against the deps pinned
+          # in deps-lock.json (test.check included), so no network or $HOME
+          # is needed. A plain runCommand fails: the Clojure CLI tries to
+          # create ~/.clojure under the sandbox's unwritable /homeless-shelter.
+          clojureTests = helpers.mkClojureTests {
+            name = "org.fudo/gpu-device-assigner";
+            src = ./.;
+          };
         };
 
         devShells = rec {
