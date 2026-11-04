@@ -50,6 +50,25 @@ The lease renewer loop is responsible for both refreshing active leases and fina
 
 This removes the need for an external finalize webhook—the renewer handles both promotion and garbage collection based on the current state of pods and leases.
 
+### Claim and cleanup safety rules
+
+- A lease is only taken over when its holder is *verifiably* gone: for an
+  active lease, no running pod with the holder UID; for a pending proposal, no
+  running pod carrying the reservation id, and the proposal is older than the
+  grace period (`proposal-grace-seconds`). Lease expiry alone never frees a
+  GPU, and an API error looking up the holder means "held".
+- Takeovers are a JSONPatch guarded by a `test` on `resourceVersion`, and the
+  renewer's finalize patches and deletes carry the resourceVersion they read,
+  so concurrent replicas cannot both win or delete each other's claims.
+- Only Ready, uncordoned nodes that advertise allocatable `nvidia.com/gpu` are
+  considered, since pods are pinned with `spec.nodeName` (bypassing the
+  scheduler).
+- Among matching GPUs, the one with the fewest labels is tried first
+  ("best fit"), keeping more versatile cards free for workloads that need them.
+- Pods that opt in but request no `nvidia.com/gpu` are admitted without a lease.
+
+`GET /healthz` on the API port is a cheap readiness endpoint.
+
 
 ## Testing
 

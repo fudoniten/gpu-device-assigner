@@ -10,18 +10,32 @@
             [gpu-device-assigner.util :as util]
             [taoensso.telemere :as log :refer [log!]]))
 
+(declare admission-review-response)
+
 (defn json-middleware
-  "Middleware to encode/decode the JSON body of requests/responses."
+  "Middleware to decode the JSON request body, pass it to `handler` as `:body`,
+   and encode the handler's result as a JSON response.
+
+   Exceptions thrown by the handler are turned into a well-formed AdmissionReview
+   denial (with the request's uid), so the API server always receives a valid
+   response instead of a transport error."
   [handler]
   (fn [req]
     (let [body (:body req)]
       (when-not body
-        (throw (ex-info "missing request body!" {:req req})))
-      (let [result (-> body
-                       (slurp)
-                       (util/try-json-parse)
-                       (handler))]
-        (if (and (map? result) (contains? result :status))
+        (throw (ex-info "missing request body!" {})))
+      (let [parsed (util/try-json-parse (slurp body))
+            result (try
+                     (handler (assoc req :body parsed))
+                     (catch Exception e
+                       (log! :error (format "error handling request: %s" (str e)))
+                       (log! :error (util/capture-stack-trace e))
+                       (admission-review-response :uid (get-in parsed [:request :uid])
+                                                  :allowed? false
+                                                  :status 500
+                                                  :message (str "gpu-device-assigner error: "
+                                                                (.getMessage e)))))]
+        (if (and (map? result) (contains? result :status) (not (contains? result :kind)))
           (-> result
               (update :body util/try-json-generate)
               (update :headers #(assoc (or % {}) "Content-Type" "application/json")))
@@ -48,8 +62,13 @@
                   :patchType "JSONPatch"
                   :patch     patch})})
 
-(defn open-fail-middleware
-  "Middleware to ensure some response is passed to the caller."
+(defn error-middleware
+  "Last-resort middleware: turn any exception that escaped the route (e.g. an
+   unparseable body) into a plain HTTP 500. Admission denials for handler
+   errors are produced by `json-middleware`, which knows the request uid.
+
+   Note this fails *closed*: with `failurePolicy: Fail`, an error here means
+   the pod is not created."
   [_]
   (fn [handler]
     (fn [req]
@@ -58,21 +77,23 @@
         (catch Exception e
           (log! :error (format "error handling request: %s" (str e)))
           (log! :error (with-out-str (print-stack-trace e)))
-          (let [uid (get-in req [:request :uid])]
-            (admission-review-response :uid uid
-                                       :allowed? false
-                                       :status 500
-                                       :message (.getMessage e))))))))
+          {:status  500
+           :headers {"Content-Type" "text/plain"}
+           :body    (str "internal error: " (.getMessage e))})))))
 
 (defn device-assignment-patch
   "Generate JSONPatch that adds CDI assignment + node pin + breadcrumbs.
-   `devices` is a seq of {:device-id uuid :node node}; all must share the same node."
-  [_ devices reservation-id]
+   `devices` is a seq of {:device-id uuid :node node}; all must share the same node.
+   `has-annotations?` says whether the pod already has a metadata.annotations
+   map: JSONPatch `add` on an existing member *replaces* it, so the empty map
+   is only added when there is none."
+  [has-annotations? devices reservation-id]
   (let [node      (-> devices first :node)
-        uuids     (mapv #(-> % :device-id) devices)
+        uuids     (mapv #(-> % :device-id name) devices)
         cdi-value (str/join "," (map #(format "nvidia.com/gpu=UUID=%s" %) uuids))
         patch
-        [{:op "add" :path "/metadata/annotations" :value {}}
+        [(when-not has-annotations?
+           {:op "add" :path "/metadata/annotations" :value {}})
          ;; Breadcrumbs for ops / GC tools (comma-separated for multi-GPU)
          {:op "add" :path "/metadata/annotations/fudo.org~1gpu.uuid"
           :value (str/join "," uuids)}
@@ -81,7 +102,8 @@
          ;; CDI assignment — comma-separated list for multi-GPU
          {:op "add" :path "/metadata/annotations/cdi.k8s.io~1gpu-assignment" :value cdi-value}
          ;; Hard bind to the node that actually has these UUIDs
-         {:op "add" :path "/spec/nodeName" :value node}]]
+         {:op "add" :path "/spec/nodeName" :value node}]
+        patch (vec (remove nil? patch))]
     (log/trace! (str "\n##########\n#  PATCH\n##########\n\n" (util/pprint-string patch)))
     (-> patch
         (util/try-json-generate)
@@ -96,30 +118,40 @@
         (log/trace! (str "\n\n##########\n# RESPONSE\n##########\n\n" (util/pprint-string res)))
         res))))
 
-(defn- nvidia-gpu-requested?
-  "Return true if any container or init-container in the pod spec requests nvidia.com/gpu resources."
-  [pod-spec]
-  (boolean
-   (some (fn [container]
-           (some (fn [[k v]]
-                   (and (= (util/full-name k) "nvidia.com/gpu")
-                        (not (#{0 "0"} v))))
-                 (get-in container [:resources :requests] {})))
-         (concat (get pod-spec :containers [])
-                 (get pod-spec :initContainers [])))))
+(defn- container-gpu-count
+  "nvidia.com/gpu requested by one container (requests, falling back to limits)."
+  [container]
+  (let [qty (fn [m] (some (fn [[k v]] (when (= (util/full-name k) "nvidia.com/gpu") v)) m))
+        v   (or (qty (get-in container [:resources :requests]))
+                (qty (get-in container [:resources :limits])))]
+    (cond
+      (string? v)  (try (Long/parseLong v) (catch NumberFormatException _ 0))
+      (integer? v) (long v)
+      :else        0)))
 
-(defn- nvidia-gpu-count
-  "Sum nvidia.com/gpu requests across all containers and init-containers."
+(defn nvidia-gpu-count
+  "Effective nvidia.com/gpu request of a pod, as Kubernetes computes it:
+   max(largest init container, sum of regular containers + restartable
+   (sidecar) init containers)."
   [pod-spec]
-  (reduce +
-          (for [container (concat (get pod-spec :containers [])
-                                  (get pod-spec :initContainers []))
-                [k v]     (get-in container [:resources :requests] {})
-                :when     (= (util/full-name k) "nvidia.com/gpu")]
-            (cond
-              (string? v)  (try (Integer/parseInt v) (catch NumberFormatException _ 0))
-              (integer? v) (long v)
-              :else        0))))
+  (let [inits     (get pod-spec :initContainers [])
+        sidecar?  #(= "Always" (:restartPolicy %))
+        sidecars  (filter sidecar? inits)
+        plain     (remove sidecar? inits)
+        app-total (reduce + (map container-gpu-count (concat (get pod-spec :containers []) sidecars)))
+        init-max  (reduce max 0 (map container-gpu-count plain))]
+    (max app-total init-max)))
+
+(defn- nvidia-gpu-requested?
+  "Return true if the pod requests any nvidia.com/gpu."
+  [pod-spec]
+  (pos? (nvidia-gpu-count pod-spec)))
+
+(defn- label-enabled?
+  "A requirement label is enabled unless its value is explicitly false-ish."
+  [v]
+  (and (some? v)
+       (not (contains? #{"false" "0" "no" ""} (str/lower-case (str v))))))
 
 (defn handle-mutation
   "Handle an AdmissionReview request for mutating a pod's annotations."
@@ -135,8 +167,8 @@
       (do
         (log! :debug (format "Received AdmissionReview request: %s" (util/pprint-string req)))
         (let [dry-run?          (true? (get-in req [:request :dryRun]))
-              fudo-label?       (fn [[k _]] (= "fudo.org" (namespace k)))
-              label-enabled?    (fn [[_ v]] v)
+              fudo-label?       (fn [[k _]] (= "fudo.org" (namespace (keyword (util/full-name k)))))
+              enabled?          (fn [[_ v]] (label-enabled? v))
               gpu-label?        (fn [[k _]] (= "gpu" (first (str/split (name k) #"\."))))
               remove-assign     (fn [[k _]] (not= k :fudo.org/gpu.assign))
               uid               (get-in req [:request :uid])
@@ -146,10 +178,11 @@
               namespace         (get-in req [:request :object :metadata :namespace])
               all-labels        (get-in req [:request :object :metadata :labels])
               requested-labels  (->> all-labels
-                                     (filter (every-pred fudo-label? label-enabled? gpu-label? remove-assign))
+                                     (filter (every-pred fudo-label? enabled? gpu-label? remove-assign))
                                      (keys)
                                      (set))
-              has-assign-label? (boolean (get all-labels :fudo.org/gpu.assign))
+              has-assign-label? (label-enabled? (core/map-value all-labels :fudo.org/gpu.assign))
+              has-annotations?  (map? (get-in req [:request :object :metadata :annotations]))
               pod-spec          (get-in req [:request :object :spec])
               gpu-count         (nvidia-gpu-count pod-spec)]
           (cond
@@ -173,9 +206,19 @@
                                            :message (format "pod %s/%s requests nvidia.com/gpu resources but specifies no fudo.org/gpu.* labels; add the appropriate labels to declare GPU requirements"
                                                             namespace pod)))
 
+            ;; Opted in (or carries GPU labels) but requests no GPU: there is
+            ;; nothing for the device plugin to hand out, so leasing a card
+            ;; would only strand it. Admit unmodified.
+            (zero? gpu-count)
+            (do (log! :info (format "pod %s/%s requests no nvidia.com/gpu; admitting without a lease"
+                                    namespace pod))
+                (admission-review-response :uid uid :allowed? true
+                                           :status 200
+                                           :message "no nvidia.com/gpu requested; no assignment"))
+
             :else
             (do (log! :info (format "processing pod %s/%s, requesting %d GPU(s) with labels [%s]"
-                                    namespace pod gpu-count (str/join "," (map name requested-labels))))
+                                    namespace pod gpu-count (str/join "," (map util/full-name requested-labels))))
                 (if-let [assigned-device (core/assign-device ctx {:pod              pod
                                                                   :reservation-id   reservation-id
                                                                   :namespace        namespace
@@ -184,7 +227,7 @@
                   (let [{:keys [devices reservation-id]} assigned-device]
                     (log/trace! :admission-review/accept
                                 (admission-review-response :uid uid :allowed? true
-                                                           :patch (device-assignment-patch ctx devices reservation-id))))
+                                                           :patch (device-assignment-patch has-annotations? devices reservation-id))))
                   (log/trace! :admission-review/reject
                               (admission-review-response :uid uid :status 429 :allowed? false
                                                          :message (format "no %d-GPU set with requested labels free for pod %s/%s"
@@ -194,15 +237,21 @@
   "Return a snapshot of devices, their labels, and any current assignments."
   [ctx]
   (fn [_]
-    (util/try-json-generate (response/response (core/device-inventory ctx)))))
+    (-> (core/device-inventory ctx)
+        (util/try-json-generate)
+        (response/response)
+        (assoc-in [:headers "Content-Type"] "application/json"))))
 
 (defn api-app [ctx]
   (ring/ring-handler
-   (ring/router [["/mutate"  {:post (handle-mutation ctx)
+   (ring/router [["/mutate"  {:post (let [h (handle-mutation ctx)] (fn [req] (h (:body req))))
                               :middleware [json-middleware]}]
-                 ["/devices" {:get (handle-device-inventory ctx)}]]
+                 ["/devices" {:get (handle-device-inventory ctx)}]
+                 ["/healthz" {:get (fn [_] {:status 200
+                                            :headers {"Content-Type" "text/plain"}
+                                            :body "ok"})}]]
                 {:data {:middleware [(log-requests-middleware ctx)
-                                     (open-fail-middleware ctx)]}})
+                                     (error-middleware ctx)]}})
    (constantly {:status 404 :body "not found"})))
 
 (defn start-api-server

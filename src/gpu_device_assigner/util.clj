@@ -76,7 +76,10 @@
   (json/parse-string str true))
 
 (defn full-name
+  "Name of a keyword/symbol including its namespace (\"fudo.org/gpu.x\").
+   Strings are returned unchanged."
   [k]
-  (if-let [ns (namespace k)]
-    (format "%s/%s" ns (name k))
-    (name k)))
+  (cond
+    (string? k)    k
+    (namespace k)  (format "%s/%s" (namespace k) (name k))
+    :else          (name k)))
